@@ -74,7 +74,10 @@ export default function App() {
     diagnostics: (value: Diagnostics) => setDiagnostics(value),
     guestRequest: (request: MultiGuestRequest) => { setPendingGuest(request); setPlayerStates((states) => ({ ...states, [request.slot]: 'pending' })); },
     input: (slot: PlayerSlot, keys: number) => { if (hostSide) engineRef.current?.setKeys(slot - 1, keys); },
-    frame: (slot: PlayerSlot, frame: FrameMessage) => { if (!hostSide && slot === assignedSlot) setGuestFrame(frame); },
+    // This callback is created before the guest receives its assigned slot.
+    // Do not capture the initial null state: the host session already routes
+    // only the approved slot to this guest connection.
+    frame: (_slot: PlayerSlot, frame: FrameMessage) => { if (!hostSide) setGuestFrame(frame); },
     audio: (_slot: PlayerSlot, audio: AudioMessage) => { if (!hostSide) playAudio(audio); },
     connection: (slot: PlayerSlot, state: 'pending' | 'connected' | 'disconnected', capacity?: number) => { setPlayerStates((states) => { const next = { ...states, [slot]: state }; if (hostSide) setApproved(Object.entries(next).some(([player, value]) => Number(player) > 1 && value === 'connected')); return next; }); if (state === 'connected') { setApproved(true); setAssignedSlot(slot); if (capacity) setRoomCapacity(capacity); } if (state === 'disconnected') { if (hostSide) engineRef.current?.setKeys(slot - 1, 0); } },
     closed: () => { setApproved(false); setAssignedSlot(null); setStatus('Peer disconnected. Input released.'); if (hostSide) for (let slot = 1; slot < roomCapacity; slot += 1) engineRef.current?.setKeys(slot, 0); },

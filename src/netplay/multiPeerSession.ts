@@ -27,6 +27,7 @@ type ConnectionState = {
   clientId: string;
   slot: PlayerSlot | null;
   approved: boolean;
+  helloTimer?: number;
   receivedFrames: number;
   lastFpsAt: number;
   lastError: string;
@@ -161,7 +162,12 @@ export class MultiPeerSession {
     const state: ConnectionState = { connection, clientId: '', slot: null, approved: !hostSide, receivedFrames: 0, lastFpsAt: performance.now(), lastError: '' };
     this.connections.set(connection.peer, state);
     connection.on('open', () => {
-      this.send(state, { type: 'hello', protocol: 1, clientId: this.id });
+      const hello = () => this.send(state, { type: 'hello', protocol: 1, clientId: this.id });
+      hello();
+      // A data channel can report open before the first application packet
+      // reaches the other PeerJS endpoint. Retry until approval closes the
+      // handshake without changing the assigned slot.
+      if (!hostSide) state.helloTimer = window.setInterval(() => { if (!state.approved) hello(); }, 1000);
       this.events.status(hostSide ? 'Guest connected; approval and slot assignment required.' : 'Connected to host; awaiting approval…');
     });
     connection.on('data', (value) => this.handle(state, value, hostSide));
@@ -174,6 +180,7 @@ export class MultiPeerSession {
     if (!isWireMessage(value)) return;
     if (value.type === 'hello') {
       if (!hostSide) return;
+      if (state.clientId) return;
       state.clientId = value.clientId;
       if ([...this.connections.values()].some((item) => item !== state && item.clientId === value.clientId)) { this.send(state, { type: 'approval', accepted: false, reason: 'This player is already connected.' }); this.closeConnection(state); return; }
       state.slot = this.findSlot(value.clientId);
@@ -186,6 +193,7 @@ export class MultiPeerSession {
     if (value.type === 'frame' && !hostSide && state.approved && this.assigned) { state.receivedFrames += 1; this.events.frame(this.assigned, value); }
     if (value.type === 'audio' && !hostSide && state.approved && this.assigned) this.events.audio(this.assigned, value);
     if (value.type === 'approval' && !hostSide) {
+      if (state.helloTimer) { window.clearInterval(state.helloTimer); state.helloTimer = undefined; }
       if (value.accepted && isPlayerSlot(value.slot)) { state.approved = true; this.approved = true; this.assigned = value.slot; this.roomCapacity = value.capacity || this.roomCapacity; this.events.connection(value.slot, 'connected', this.roomCapacity); this.events.status(`Approved as Player ${value.slot}.`); }
       else if (!value.accepted) { this.events.status(value.reason || 'Host rejected the session.'); this.close(); }
     }
@@ -212,6 +220,7 @@ export class MultiPeerSession {
 
   private closeConnection(state: ConnectionState, notify = true): void {
     if (!this.connections.delete(state.connection.peer)) return;
+    if (state.helloTimer) window.clearInterval(state.helloTimer);
     const timer = this.timers.get(state.connection.peer);
     if (timer) window.clearInterval(timer);
     this.timers.delete(state.connection.peer);
