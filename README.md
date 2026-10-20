@@ -12,9 +12,11 @@ to the game's own multiplayer requirements and compatibility.
 
 ## Features
 
-- 2–4 player host rooms with six-digit join codes and invite links.
+- 2–4 player rooms with six-digit join codes and invite links.
 - Host approval before a guest receives a player slot.
-- WebRTC video, per-player audio routing, and controller input transport.
+- Two online modes: host streaming, or distributed same-ROM deterministic input sync.
+- Host-stream WebRTC video/audio routing and controller input transport.
+- Distributed mode keeps video and audio local and exchanges only frame-numbered input.
 - Desktop keyboard controls and mobile touch controls.
 - Local ROM caching so a previously loaded ROM can be selected again on the
   same device.
@@ -28,8 +30,10 @@ The game must be a GBA title with a multiplayer or link-cable mode that is
 compatible with the linked mGBA instances. Single-player games can still be
 used in solo mode, but they will not gain multiplayer functionality.
 
-The host supplies the legally obtained ROM and runs the emulator instances.
-Guests do not need a copy of the ROM for the current host-streaming design.
+For host streaming, the host supplies the legally obtained ROM and runs all
+linked emulator instances; guests do not need a copy. For distributed mode,
+every participant must load the exact same ROM locally. Luna verifies the
+SHA-256 ROM hash before approval and does not upload ROM bytes.
 Do not upload or commit ROMs, BIOS files, save data, or other copyrighted game
 assets to this repository.
 
@@ -59,16 +63,29 @@ The GitHub Pages workflow builds the Vite app and publishes `dist/` at
 currently configures public STUN servers but has no TURN service, so some
 restrictive NAT or firewall combinations may not connect until TURN is added.
 
-## Current architecture and limitations
+## Online architectures and limitations
 
-The current online mode is host-authoritative: the host runs all linked GBA
-instances and streams each player's video and audio to that player's guest.
-This keeps guests lightweight, but it is not two independent emulator
-instances. Network quality affects streamed video/audio latency, and the game
-must tolerate the link timing produced by the mGBA setup.
+Host streaming remains available: the host runs all linked GBA instances and
+streams each player's video/audio to that player's guest. This keeps guests
+lightweight, but network quality affects streamed video/audio latency.
+
+Distributed mode is a replicated deterministic session. Each browser runs the
+same local mGBA linked-core group and consumes the same ordered input vector
+for every emulation tick. The session waits when an input for a tick is late,
+instead of running ahead and silently diverging. Audio and video are rendered
+locally, so this mode avoids guest video blur and streamed guest audio.
+
+This is not a networked one-core SIO driver: the browser WASM engine still
+links the local cores, and the peers synchronize inputs rather than serial
+register transfers. It works best for deterministic GBA link games and still
+needs real-ROM, two-device verification. Randomness, RTC behavior, emulator
+version differences, packet loss, and browser throttling can expose divergence.
+Distributed rooms require the same player count and ROM hash on every device.
 
 Real cross-network multiplayer should be tested on two physical devices,
-preferably with the guest using a separate mobile network or hotspot.
+preferably with the guest using a separate mobile network or hotspot. In
+distributed mode both devices must load the same legal ROM, choose the same
+player count, create/join the distributed room, and wait for approval.
 
 ## Testing policy
 

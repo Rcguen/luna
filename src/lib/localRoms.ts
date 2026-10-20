@@ -4,7 +4,7 @@ const DB_VERSION = 1;
 
 export type LocalRom = { hash: string; title: string; bytes: ArrayBuffer; savedAt: number };
 
-async function hashRom(bytes: Uint8Array): Promise<string> {
+export async function hashRom(bytes: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', bytes.buffer as ArrayBuffer);
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }

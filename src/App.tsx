@@ -2,17 +2,19 @@ import { useEffect, useRef, useState } from 'react';
 import { GbaEngine, type EngineDiagnostics, type EngineFrame } from './engine/wasmAdapter';
 import { type Diagnostics, type PlayerSlot } from './netplay/peerSession';
 import { MultiPeerSession, type MultiGuestRequest } from './netplay/multiPeerSession';
+import { DistributedPeerSession, type DistributedInput } from './netplay/distributedPeerSession';
 import { TouchControls } from './components/TouchControls';
 import { AuthPanel } from './components/AuthPanel';
 import { GameLibrary } from './components/GameLibrary';
 import { listGames, registerGame, type GameRecord } from './lib/cloudSaves';
-import { cacheRom, getCachedRom } from './lib/localRoms';
+import { cacheRom, getCachedRom, hashRom } from './lib/localRoms';
 import type { Session } from '@supabase/supabase-js';
 import type { AudioMessage, FrameMessage } from './netplay/protocol';
 import './styles.css';
 
-type Screen = 'home' | 'solo' | 'host' | 'guest';
+type Screen = 'home' | 'solo' | 'host' | 'guest' | 'distributed-host' | 'distributed-guest';
 type StreamQuality = 'auto' | 'smooth' | 'balanced' | 'sharp';
+type OnlineMode = 'stream' | 'distributed';
 const EMPTY_DIAGNOSTICS: Diagnostics = { signaling: 'idle', connection: 'idle', ice: 'idle', gathering: 'idle', candidate: 'idle', channel: 'idle', rtt: null, fps: null, error: '' };
 const EMPTY_ENGINE: EngineDiagnostics = { wasm: 'idle', emulator: 'idle', rom: 'waiting', framesExecuted: 0, framesRendered: 0, lastFrame: '0×0', audioFrames: 0, audioBatches: 0, audioRate: 32768, error: '' };
 let audioNextTime = 0;
@@ -53,8 +55,12 @@ export default function App() {
   const [room, setRoom] = useState('');
   const [roomCode, setRoomCode] = useState('');
   const [roomCapacity, setRoomCapacity] = useState(2);
+  // Keep legacy room links compatible: distributed rooms opt in through
+  // mode=distributed, while older stream invites remain stream sessions.
+  const [onlineMode, setOnlineMode] = useState<OnlineMode>('stream');
   const [status, setStatus] = useState('Ready for a 2-player session.');
   const [romName, setRomName] = useState('No ROM loaded');
+  const [romHash, setRomHash] = useState('');
   const [romLoaded, setRomLoaded] = useState(false);
   const [romLoading, setRomLoading] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
@@ -73,6 +79,7 @@ export default function App() {
   const engineRef = useRef<GbaEngine | null>(null);
   const romBytesRef = useRef<Uint8Array | null>(null);
   const sessionRef = useRef<MultiPeerSession | null>(null);
+  const distributedSessionRef = useRef<DistributedPeerSession | null>(null);
   const hostCanvas = useRef<HTMLCanvasElement>(null);
   const guestCanvas = useRef<HTMLCanvasElement>(null);
   const audioContext = useRef<AudioContext | null>(null);
@@ -83,10 +90,20 @@ export default function App() {
   const guestDecodeBusy = useRef(false);
   const guestPendingFrame = useRef<FrameMessage | null>(null);
   const restoringLibrary = useRef<string | null>(null);
+  const distributedInputs = useRef(new Map<number, Map<PlayerSlot, number>>());
+  const distributedNextTick = useRef(0);
+  const distributedLastSentTick = useRef(-1);
+  const distributedLastSentKeys = useRef(-1);
+  const distributedStarted = useRef(false);
+  const distributedAssignedSlot = useRef<PlayerSlot | null>(null);
 
   useEffect(() => {
-    const invitedRoom = new URLSearchParams(window.location.search).get('room')?.replace(/\D/g, '') || '';
+    const params = new URLSearchParams(window.location.search);
+    const invitedRoom = params.get('room')?.replace(/\D/g, '') || '';
     if (invitedRoom.length === 6) setRoom(invitedRoom);
+    if (params.get('mode') === 'distributed') setOnlineMode('distributed');
+    const invitedPlayers = Number(params.get('players'));
+    if ([2, 3, 4].includes(invitedPlayers)) setRoomCapacity(invitedPlayers);
   }, []);
 
   const newEngine = async (players = roomCapacity) => {
@@ -151,6 +168,51 @@ export default function App() {
     closed: () => { setApproved(false); setAssignedSlot(null); setGuestHasVideo(false); setStatus('Peer disconnected. Input released.'); if (hostSide) for (let slot = 1; slot < roomCapacity; slot += 1) engineRef.current?.setKeys(slot, 0); },
   });
 
+  const makeDistributedEvents = (hostSide: boolean) => ({
+    status: (text: string) => setStatus(text),
+    diagnostics: (value: Diagnostics) => setDiagnostics(value),
+    guestRequest: (request: MultiGuestRequest) => { setPendingGuest(request); setPlayerStates((states) => ({ ...states, [request.slot]: 'pending' })); },
+    input: (value: DistributedInput) => {
+      const tick = distributedInputs.current.get(value.tick) || new Map<PlayerSlot, number>();
+      tick.set(value.slot, value.keys);
+      distributedInputs.current.set(value.tick, tick);
+    },
+    started: (tick: number) => {
+      distributedStarted.current = true;
+      distributedNextTick.current = tick;
+      distributedLastSentTick.current = -1;
+      distributedLastSentKeys.current = -1;
+      setGameStarted(true);
+      setStatus('Distributed link started. Each device is rendering its own local emulator.');
+    },
+    connection: (slot: PlayerSlot, state: 'pending' | 'connected' | 'disconnected', capacity?: number) => {
+      setPlayerStates((states) => ({ ...states, [slot]: state }));
+      if (state === 'connected') {
+        setApproved(true);
+        if (!hostSide) {
+          distributedAssignedSlot.current = slot;
+          setAssignedSlot(slot);
+          distributedSessionRef.current?.markReady();
+        }
+        if (capacity) setRoomCapacity(capacity);
+      }
+      if (state === 'disconnected') {
+        distributedStarted.current = false;
+        setGameStarted(false);
+        setStatus('Peer disconnected. Distributed emulation paused.');
+      }
+    },
+    closed: () => {
+      distributedStarted.current = false;
+      distributedInputs.current.clear();
+      setApproved(false);
+      setAssignedSlot(null);
+      distributedAssignedSlot.current = null;
+      setGameStarted(false);
+      setStatus('Peer disconnected. Input released.');
+    },
+  });
+
   const startHost = async () => {
     try {
       if (romLoading) { setStatus('ROM is still loading. Please wait a moment.'); return; }
@@ -168,6 +230,30 @@ export default function App() {
     } catch (error) { engineRef.current?.fail(error); setEngineStatus(engineRef.current?.diagnostics() || EMPTY_ENGINE); setStatus(`Failed to start emulator: ${error instanceof Error ? error.message : String(error)}`); }
   };
 
+  const startDistributedHost = async () => {
+    try {
+      if (romLoading) { setStatus('ROM is still loading. Please wait a moment.'); return; }
+      if (!romBytesRef.current) { setStatus('Load the same legal ROM on both devices before creating a distributed room.'); return; }
+      const localHash = romHash || await hashRom(romBytesRef.current);
+      setRomHash(localHash);
+      setStatus('Starting distributed link mode…');
+      const engine = await newEngine(roomCapacity);
+      engine.loadRom(romBytesRef.current);
+      await ensureAudio();
+      const session = new DistributedPeerSession(makeDistributedEvents(true));
+      distributedSessionRef.current = session;
+      const code = await session.host(roomCapacity, localHash);
+      distributedInputs.current.clear();
+      distributedStarted.current = false;
+      setRoomCode(code);
+      setApproved(false);
+      setAssignedSlot(null);
+      setGameStarted(false);
+      setScreen('distributed-host');
+      session.markReady();
+    } catch (error) { engineRef.current?.fail(error); setEngineStatus(engineRef.current?.diagnostics() || EMPTY_ENGINE); setStatus(`Failed to start distributed mode: ${error instanceof Error ? error.message : String(error)}`); }
+  };
+
   const startSolo = async () => {
     try {
       if (romLoading) { setStatus('ROM is still loading. Please wait a moment.'); return; }
@@ -181,6 +267,10 @@ export default function App() {
   };
 
   const joinRoom = async () => {
+    if (onlineMode === 'distributed') {
+      await joinDistributedRoom();
+      return;
+    }
     try {
       const clean = room.replace(/\D/g, '');
       if (clean.length !== 6) { setStatus('Enter the six-digit room code.'); return; }
@@ -196,15 +286,40 @@ export default function App() {
     } catch (error) { setStatus(`Connection failed: ${error instanceof Error ? error.message : String(error)}`); }
   };
 
+  const joinDistributedRoom = async () => {
+    try {
+      const clean = room.replace(/\D/g, '');
+      if (clean.length !== 6) { setStatus('Enter the six-digit room code.'); return; }
+      if (!romBytesRef.current) { setStatus('Load the exact same legal ROM before joining distributed mode.'); return; }
+      const localHash = romHash || await hashRom(romBytesRef.current);
+      setRomHash(localHash);
+      setStatus('Starting local emulator and connecting…');
+      const engine = await newEngine(roomCapacity);
+      engine.loadRom(romBytesRef.current);
+      await ensureAudio();
+      const session = new DistributedPeerSession(makeDistributedEvents(false));
+      distributedSessionRef.current = session;
+      distributedInputs.current.clear();
+      distributedStarted.current = false;
+      await session.join(clean, localHash);
+      setRoomCode(clean);
+      setGameStarted(false);
+      setScreen('distributed-guest');
+      await audioContext.current?.resume().catch(() => undefined);
+    } catch (error) { engineRef.current?.fail(error); setEngineStatus(engineRef.current?.diagnostics() || EMPTY_ENGINE); setStatus(`Distributed connection failed: ${error instanceof Error ? error.message : String(error)}`); }
+  };
+
   const loadRom = async (file: File) => {
     setRomLoading(true);
     setStatus(`Loading ${file.name}…`);
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
-      const hash = await cacheRom(file.name, bytes).catch(() => '');
+      const localHash = await hashRom(bytes);
+      const cachedHash = await cacheRom(file.name, bytes).catch(() => '');
       // Publish the bytes before the asynchronous WASM startup so a fast
       // click on Create room/Play solo cannot observe a false empty state.
       romBytesRef.current = bytes;
+      setRomHash(localHash);
       if (!engineRef.current) await newEngine();
       engineRef.current?.loadRom(bytes);
       setRomName(file.name);
@@ -217,7 +332,7 @@ export default function App() {
           setLibraryRefresh((value) => value + 1);
         } catch (error) { setStatus(`ROM loaded locally; cloud metadata unavailable: ${error instanceof Error ? error.message : String(error)}`); }
       }
-      setStatus(hash ? 'ROM saved on this device. The host can now start emulation.' : 'ROM loaded. Local browser storage is unavailable, so choose it again next time.');
+      setStatus(cachedHash ? 'ROM saved on this device. The host can now start emulation.' : 'ROM loaded. Local browser storage is unavailable, so choose it again next time.');
     } catch (error) { romBytesRef.current = null; engineRef.current?.fail(error); setEngineStatus(engineRef.current?.diagnostics() || EMPTY_ENGINE); setStatus(`ROM load failed: ${error instanceof Error ? error.message : String(error)}`); }
     finally { setRomLoading(false); }
   };
@@ -235,6 +350,7 @@ export default function App() {
         const cached = await getCachedRom(game.rom_hash);
         if (!cached) { setStatus(`Welcome back. Choose “Load ROM” once to restore ${game.title} on this device.`); return; }
         romBytesRef.current = new Uint8Array(cached.bytes);
+        setRomHash(game.rom_hash);
         setRomName(game.title);
         setRomLoaded(true);
         setCurrentGame(game);
@@ -319,7 +435,54 @@ export default function App() {
   }, [screen, romLoaded, gameStarted, approved, roomCapacity, streamQuality, diagnostics.rtt]);
 
   useEffect(() => {
-    if (!['solo', 'host', 'guest'].includes(screen)) return;
+    if (!['distributed-host', 'distributed-guest'].includes(screen) || !romLoaded) return;
+    let raf = 0;
+    let lastRunAt = 0;
+    const tick = (now: number) => {
+      const engine = engineRef.current;
+      const session = distributedSessionRef.current;
+      const slot = distributedAssignedSlot.current || (screen === 'distributed-host' ? 1 : null);
+      if (!engine || !session || !slot || !distributedStarted.current) { raf = requestAnimationFrame(tick); return; }
+      if (now - lastRunAt < 16) { raf = requestAnimationFrame(tick); return; }
+      const frame = distributedNextTick.current;
+      const localKeys = guestKeys.current >>> 0;
+      const inputs = distributedInputs.current.get(frame) || new Map<PlayerSlot, number>();
+      inputs.set(slot, localKeys);
+      distributedInputs.current.set(frame, inputs);
+      if (distributedLastSentTick.current !== frame || distributedLastSentKeys.current !== localKeys) {
+        session.sendInput(frame, slot, localKeys);
+        distributedLastSentTick.current = frame;
+        distributedLastSentKeys.current = localKeys;
+      }
+      // Deterministic replication: never advance one local core group without
+      // the complete input vector for that tick. This trades some latency for
+      // correctness and prevents silent divergence on lossy connections.
+      if (inputs.size < roomCapacity) { raf = requestAnimationFrame(tick); return; }
+      try {
+        for (let player = 1; player <= roomCapacity; player += 1) engine.setKeys(player - 1, inputs.get(player as PlayerSlot) || 0);
+        engine.runFrame();
+        const local = engine.frame(slot - 1);
+        if (local) drawFrame(hostCanvas.current, local);
+        const audio = engine.drainAudio(slot);
+        if (audio) playPcm(audio.rate, audio.samples);
+        distributedInputs.current.delete(frame);
+        distributedNextTick.current = frame + 1;
+        lastRunAt = now;
+      } catch (error) {
+        engine.fail(error);
+        setEngineStatus(engine.diagnostics());
+        setStatus(`Distributed emulator stopped: ${error instanceof Error ? error.message : String(error)}`);
+        return;
+      }
+      if (now - lastEngineUpdate.current >= 250) { setEngineStatus(engine.diagnostics()); lastEngineUpdate.current = now; }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [screen, romLoaded, roomCapacity]);
+
+  useEffect(() => {
+    if (!['solo', 'host', 'guest', 'distributed-host', 'distributed-guest'].includes(screen)) return;
     const map: Record<string, number> = {
       ArrowUp: 0x40, ArrowDown: 0x80, ArrowLeft: 0x20, ArrowRight: 0x10,
       z: 1, Z: 1, KeyZ: 1, x: 2, X: 2, KeyX: 2,
@@ -332,12 +495,12 @@ export default function App() {
       event.preventDefault();
       guestKeys.current = down ? guestKeys.current | value : guestKeys.current & ~value;
       if (screen === 'guest') sessionRef.current?.sendInput(guestKeys.current);
-      else engineRef.current?.setKeys(0, guestKeys.current);
+      else if (!screen.startsWith('distributed')) engineRef.current?.setKeys(0, guestKeys.current);
     };
     const release = () => {
       guestKeys.current = 0;
       if (screen === 'guest') sessionRef.current?.sendInput(0);
-      else engineRef.current?.setKeys(0, 0);
+      else if (!screen.startsWith('distributed')) engineRef.current?.setKeys(0, 0);
     };
     const down = (event: KeyboardEvent) => update(event, true);
     const up = (event: KeyboardEvent) => update(event, false);
@@ -345,11 +508,11 @@ export default function App() {
     return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); window.removeEventListener('blur', release); document.removeEventListener('visibilitychange', release); release(); };
   }, [screen]);
 
-  useEffect(() => () => { sessionRef.current?.close(); engineRef.current?.stop(); }, []);
+  useEffect(() => () => { sessionRef.current?.close(); distributedSessionRef.current?.close(); engineRef.current?.stop(); }, []);
 
   const startGame = () => { if (!romLoaded) { setStatus('Load your legal ROM before starting.'); return; } setGameStarted(true); setStatus(Object.values(playerStates).slice(1, roomCapacity).some((state) => state !== 'connected') ? 'Game running; waiting for remaining guest seats.' : 'Game started.'); };
-  const leave = () => { sessionRef.current?.close(); engineRef.current?.stop(); resetAudioClock(); sessionRef.current = null; engineRef.current = null; romBytesRef.current = null; guestPendingFrame.current = null; setEngineStatus(EMPTY_ENGINE); setRomLoaded(false); setRomLoading(false); setGameStarted(false); setPendingGuest(null); setApproved(false); setAssignedSlot(null); setGuestHasVideo(false); setHostPanelOpen(false); setScreen('home'); setStatus(`Ready for a ${roomCapacity}-player session.`); };
-  const inviteLink = roomCode ? `${window.location.origin}${window.location.pathname}?room=${roomCode}` : '';
+  const leave = () => { sessionRef.current?.close(); distributedSessionRef.current?.close(); engineRef.current?.stop(); resetAudioClock(); sessionRef.current = null; distributedSessionRef.current = null; engineRef.current = null; romBytesRef.current = null; guestPendingFrame.current = null; distributedInputs.current.clear(); distributedStarted.current = false; distributedAssignedSlot.current = null; setEngineStatus(EMPTY_ENGINE); setRomLoaded(false); setRomLoading(false); setGameStarted(false); setPendingGuest(null); setApproved(false); setAssignedSlot(null); setGuestHasVideo(false); setHostPanelOpen(false); setScreen('home'); setStatus(`Ready for a ${roomCapacity}-player session.`); };
+  const inviteLink = roomCode ? `${window.location.origin}${window.location.pathname}?room=${roomCode}${screen.startsWith('distributed') ? `&mode=distributed&players=${roomCapacity}` : ''}` : '';
   const copyInvite = async () => { if (!inviteLink) return; await navigator.clipboard?.writeText(inviteLink); setStatus('Invite link copied.'); };
 
   if (screen === 'solo') return <GameShell role="solo" title="Solo game" subtitle={romName} canvasRef={hostCanvas} local badge="SOLO"><EngineStatusPanel status={engineStatus} /><TouchControls onKeys={(keys) => engineRef.current?.setKeys(0, keys)} /><button className="secondary" onClick={leave}>Exit game</button></GameShell>;
@@ -365,19 +528,33 @@ export default function App() {
     <TouchControls onKeys={(keys) => engineRef.current?.setKeys(0, keys)} /><button className="secondary" onClick={leave}>End session</button>
   </GameShell>;
 
+  if (screen === 'distributed-host') return <GameShell role="host" title="Distributed room" subtitle={`${roomCapacity}-player room · ${formatCode(roomCode)}`} canvasRef={hostCanvas} local badge="HOST">
+    <button className="host-tools-toggle" type="button" aria-expanded={hostPanelOpen} onClick={() => setHostPanelOpen((open) => !open)}>{hostPanelOpen ? 'Close' : 'Room'}</button>
+    <div className={`host-tools${hostPanelOpen ? ' is-open' : ''}`}>
+      <div className="room-code">{formatCode(roomCode)}</div><p className="muted">Share this code or invite link. Every player must load the exact same ROM locally.</p><div className="invite-row"><input aria-label="Distributed invite link" readOnly value={inviteLink} /><button className="secondary" onClick={() => void copyInvite()}>Copy invite</button></div>
+      {pendingGuest && <div className="approval"><strong>Guest requests Player {pendingGuest.slot}</strong><div><button onClick={() => { pendingGuest.approve(); setPendingGuest(null); }}>Approve</button><button className="secondary" onClick={() => { pendingGuest.reject(); setPendingGuest(null); }}>Reject</button></div></div>}
+      <div className="lobby">{Array.from({ length: roomCapacity }, (_, index) => index + 1).map((slot) => <div key={slot}><span>Player {slot}{slot === 1 ? ' · Host' : ''}</span><strong>{playerStates[slot]}</strong></div>)}</div>
+      <StatusPanel diagnostics={diagnostics} status={status} /><EngineStatusPanel status={engineStatus} /><p className="muted">Distributed mode exchanges only frame-numbered inputs. Video, audio, ROM bytes, and saves stay local.</p>
+    </div>
+    <TouchControls onKeys={(keys) => { guestKeys.current = keys; }} /><button className="secondary" onClick={leave}>End session</button>
+  </GameShell>;
+
   if (screen === 'guest') return <GameShell role="guest" title={`Guest Player ${assignedSlot || '…'}`} subtitle={`${roomCapacity}-player room · ${formatCode(roomCode)}`} canvasRef={guestCanvas} overlay={!guestHasVideo ? <div className="screen-overlay">Waiting for host video<small>Ask the host to approve you and start the game.</small></div> : undefined}><StatusPanel diagnostics={diagnostics} status={status} /><TouchControls onKeys={(keys) => sessionRef.current?.sendInput(keys)} /><button className="secondary" onClick={leave}>Disconnect</button></GameShell>;
+
+  if (screen === 'distributed-guest') return <GameShell role="guest" local badge={assignedSlot ? `P${assignedSlot}` : 'GUEST'} title={`Player ${assignedSlot || '…'}`} subtitle={`${roomCapacity}-player distributed room · ${formatCode(roomCode)}`} canvasRef={hostCanvas} overlay={!gameStarted ? <div className="screen-overlay">Waiting for synchronized start<small>Both devices must approve and load the same ROM.</small></div> : undefined}><StatusPanel diagnostics={diagnostics} status={status} /><EngineStatusPanel status={engineStatus} /><TouchControls onKeys={(keys) => { guestKeys.current = keys; }} /><button className="secondary" onClick={leave}>Disconnect</button></GameShell>;
 
   const loadSavedGame = async (game: GameRecord) => {
     const cached = await getCachedRom(game.rom_hash);
     if (!cached) { setStatus(`This ROM is not cached on this device. Choose “Load ROM” once for ${game.title}.`); return; }
     romBytesRef.current = new Uint8Array(cached.bytes);
+    setRomHash(game.rom_hash);
     setRomName(game.title); setRomLoaded(true); setCurrentGame(game);
     localStorage.setItem(lastGameKey(game.user_id), game.id);
     void registerGame(game.user_id, game.title, new Uint8Array(cached.bytes)).catch(() => undefined);
     setStatus(`Loaded ${game.title}. Ready to play.`);
   };
 
-  return <main className="home"><div className="brand"><span className="star" aria-hidden="true">✦</span><p className="eyebrow">ONLINE GBA ADVENTURES</p><h1>Luna</h1><p className="lede">Your games, ready where you left them.</p></div><AuthPanel onSession={setSession} /><section className="home-card" aria-labelledby="play-heading"><div className="play-heading"><div><p id="play-heading" className="eyebrow">PLAY</p><h2 title={romLoaded ? romName : 'Choose a game'}>{romLoaded ? romName : 'Choose a game'}</h2></div><span className="ready-pill">{romLoaded ? 'READY' : 'LOCAL ROM'}</span></div><label className="muted" htmlFor="room-capacity">Players per room</label><select id="room-capacity" value={roomCapacity} onChange={(e) => { const value = Number(e.target.value); setRoomCapacity(value); setStatus(`Ready for a ${value}-player session.`); }}><option value="2">2 players</option><option value="3">3 players</option><option value="4">4 players</option></select><label className="file-button home-file">{romLoading ? 'Loading ROM…' : romLoaded ? 'Change local ROM' : 'Load ROM from device'}<input aria-label="Load a legal ROM" type="file" accept=".gba,.gb,.gbc" disabled={romLoading} onChange={(e) => e.target.files?.[0] && loadRom(e.target.files[0])} /></label><div className="primary-actions"><button className="secondary" onClick={startSolo} disabled={romLoading || !romLoaded}>{romLoading ? 'Loading ROM…' : 'Play solo'}</button><button onClick={startHost} disabled={romLoading || !romLoaded}>{romLoading ? 'Loading ROM…' : 'Create room'} <span aria-hidden="true">→</span></button></div><div className="join-row"><input aria-label="Six-digit room code" inputMode="numeric" maxLength={6} placeholder="ROOM CODE" value={room} onChange={(e) => setRoom(e.target.value.replace(/\D/g, ''))} /><button className="secondary" onClick={joinRoom}>Join</button></div><p className="status" role="status">{status}</p></section><GameLibrary userId={session?.user.id || null} refreshKey={libraryRefresh} onLoadGame={loadSavedGame} /><footer>ROM files stay on this device. Your account stores game metadata and cloud saves, so your library can remember what to open next.</footer></main>;
+  return <main className="home"><div className="brand"><span className="star" aria-hidden="true">✦</span><p className="eyebrow">ONLINE GBA ADVENTURES</p><h1>Luna</h1><p className="lede">Your games, ready where you left them.</p></div><AuthPanel onSession={setSession} /><section className="home-card" aria-labelledby="play-heading"><div className="play-heading"><div><p id="play-heading" className="eyebrow">PLAY</p><h2 title={romLoaded ? romName : 'Choose a game'}>{romLoaded ? romName : 'Choose a game'}</h2></div><span className="ready-pill">{romLoaded ? 'READY' : 'LOCAL ROM'}</span></div><label className="muted" htmlFor="room-capacity">Players per room</label><select id="room-capacity" value={roomCapacity} onChange={(e) => { const value = Number(e.target.value); setRoomCapacity(value); setStatus(`Ready for a ${value}-player session.`); }}><option value="2">2 players</option><option value="3">3 players</option><option value="4">4 players</option></select><label className="muted" htmlFor="online-mode">Online mode</label><select id="online-mode" value={onlineMode} onChange={(e) => setOnlineMode(e.target.value as OnlineMode)}><option value="distributed">Distributed same-ROM (local video/audio)</option><option value="stream">Host stream (guest needs no ROM)</option></select><label className="file-button home-file">{romLoading ? 'Loading ROM…' : romLoaded ? 'Change local ROM' : 'Load ROM from device'}<input aria-label="Load a legal ROM" type="file" accept=".gba,.gb,.gbc" disabled={romLoading} onChange={(e) => e.target.files?.[0] && loadRom(e.target.files[0])} /></label><div className="primary-actions"><button className="secondary" onClick={startSolo} disabled={romLoading || !romLoaded}>{romLoading ? 'Loading ROM…' : 'Play solo'}</button><button onClick={onlineMode === 'distributed' ? startDistributedHost : startHost} disabled={romLoading || !romLoaded}>{romLoading ? 'Loading ROM…' : onlineMode === 'distributed' ? 'Create distributed room' : 'Create stream room'} <span aria-hidden="true">→</span></button></div><div className="join-row"><input aria-label="Six-digit room code" inputMode="numeric" maxLength={6} placeholder="ROOM CODE" value={room} onChange={(e) => setRoom(e.target.value.replace(/\D/g, ''))} /><button className="secondary" onClick={joinRoom}>Join</button></div><p className="muted">{onlineMode === 'distributed' ? 'Both devices load the same ROM. Only synchronized inputs cross the network.' : 'The host runs the ROM and streams each player view.'}</p><p className="status" role="status">{status}</p></section><GameLibrary userId={session?.user.id || null} refreshKey={libraryRefresh} onLoadGame={loadSavedGame} /><footer>ROM files stay on this device. Your account stores game metadata and cloud saves, so your library can remember what to open next.</footer></main>;
 }
 
 const canvasImages = new WeakMap<HTMLCanvasElement, ImageData>();

@@ -12,14 +12,17 @@ independent web repository.
 
 ## Decision
 
-Luna uses a host-authoritative architecture: one host runs all linked GBA
-instances and sends each guest only the video/audio for its assigned instance.
-Guests send validated input back to the host. PeerJS/WebRTC connections are
-one-to-one between host and guest; guests do not form a mesh.
+Luna supports two explicit architectures. Host streaming keeps one host running
+all linked GBA instances and sends each guest only the video/audio for its
+assigned instance. Distributed mode runs the same linked-core group on every
+device and synchronizes the complete per-frame input vector through a host
+relay. Both modes use PeerJS/WebRTC for signaling and transport.
 
-This keeps link timing inside one emulator process. A distributed design would
-need to synchronize link transfers and emulator cycles over the network, which
-the current browser bridge does not provide.
+The distributed implementation deliberately does not pretend to expose a
+network SIO driver: the shipped bridge has a reliable local mGBA lockstep
+coordinator, so each browser keeps link timing local and peers wait for the
+same inputs before advancing. This removes streamed guest video/audio while
+preserving the generic mGBA link behavior for supported GBA games.
 
 | Concern | Decision | Reason |
 | --- | --- | --- |
@@ -30,6 +33,22 @@ the current browser bridge does not provide.
 | Android | Guest runs UI/input/audio only | No full emulator required on guests. |
 | NAT traversal | PeerJS signaling plus public STUN | TURN is not configured. |
 | Security | Approval, slot binding, bounded messages | Room codes are not auth. |
+
+### Distributed same-ROM mode
+
+- Every participant loads a legal local ROM. The SHA-256 hash must match before
+  the host can approve the player.
+- Every browser initializes the same 2–4 local mGBA cores, applies the same
+  input vector for tick `N`, then advances one local linked frame.
+- The host relays guest input messages, but no ROM, video, audio, save state,
+  or framebuffer bytes cross the network.
+- A ready barrier prevents one device from starting before all approved peers
+  have loaded the ROM. A missing input tick pauses advancement rather than
+  allowing the local copies to drift.
+- This is deterministic replication, not a distributed serial-register
+  transport. It requires matching ROM bytes, matching player count, the same
+  WASM build, and a browser/network that can keep the ordered data channel
+  alive.
 
 ## Implemented session model
 
@@ -56,3 +75,7 @@ exposes save states only.
 Therefore 2P/3P/4P status is **IMPLEMENTED BUT NOT VERIFIED WITH REAL
 GAMEPLAY** until the integration and real-ROM tests in
 `docs/MULTIPLAYER_TEST_REPORT.md` pass.
+
+The distributed mode has passed TypeScript and production-build checks only;
+no legal ROM or two-physical-device gameplay test has been run in this
+environment.
