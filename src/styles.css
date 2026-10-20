@@ -142,4 +142,33 @@ dt { color: #a994c0; } dd { margin: 0; text-align: right; color: #79e7bc; }
   .system { bottom: max(8px, calc(env(safe-area-inset-bottom) + 4px)); }
   .system .touch-button { width: clamp(82px, 22vw, 110px); height: clamp(30px, 7vh, 36px); }
 }
+@media (max-width: 760px) and (orientation: portrait) {
+  .game-shell > header { left: 54px; right: 54px; }
+  .game-shell > header > div { min-width: 0; overflow: hidden; }
+  .game-shell > header h1 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .screen-stage { align-items: flex-start; padding-top: max(58px, calc(env(safe-area-inset-top) + 48px)); }
+  .screen-stage canvas { width: min(100%, 150dvh); height: auto; max-width: 100%; max-height: calc(100dvh - 58px); aspect-ratio: 3 / 2; object-fit: contain; flex: 0 0 auto; }
+  .shoulders { top: max(62px, calc(env(safe-area-inset-top) + 52px)); }
+  .touch-controls .touch-button { box-shadow: 0 6px 18px rgba(0, 0, 0, .24), inset 0 0 0 1px rgba(0, 0, 0, .08); }
+}
+@media (max-width: 760px) and (orientation: landscape) {
+  /* Landscape is an uncluttered game-only surface, matching a handheld layout. */
+  .game-shell > header, .game-shell .screen-caption { display: none; }
+  .screen-stage { background: #000; }
+  .game-shell aside > *:not(.touch-controls):not(.secondary) { display: none; }
+  .game-shell aside > button.secondary { top: max(8px, env(safe-area-inset-top)); left: 50%; width: 72px; height: 16px; transform: translateX(-50%); padding: 0; border: 0; background: rgba(255, 255, 255, .14); box-shadow: none; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+  .game-shell aside > button.secondary::before { content: '—'; font-size: 18px; line-height: 12px; }
+  .touch-controls .touch-button { color: rgba(255, 255, 255, .94); background: rgba(0, 0, 0, .18); border-color: rgba(255, 255, 255, .72); box-shadow: 0 5px 16px rgba(0, 0, 0, .2); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+  .touch-controls .touch-button:active { background: rgba(255, 255, 255, .16); }
+  .dpad { bottom: max(42px, calc(env(safe-area-inset-bottom) + 34px)); }
+  .dpad .touch-button { border-radius: 0; }
+  .dpad .touch-button:nth-child(1) { border-radius: 18px 18px 0 0; border-bottom-color: transparent; }
+  .dpad .touch-button:nth-child(2) { border-radius: 18px 0 0 18px; border-right-color: transparent; }
+  .dpad .touch-button:nth-child(4) { border-radius: 0 18px 18px 0; border-left-color: transparent; }
+  .dpad .touch-button:nth-child(5) { border-radius: 0 0 18px 18px; border-top-color: transparent; }
+  .dpad-center { background: transparent !important; border-color: transparent !important; box-shadow: none !important; }
+  .face { display: flex; flex-direction: column; gap: clamp(8px, 2vh, 14px); bottom: max(54px, calc(env(safe-area-inset-bottom) + 46px)); }
+  .face .touch-button { flex: 0 0 auto; }
+  .face .touch-button:first-child { order: 2; }
+}
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; } }
