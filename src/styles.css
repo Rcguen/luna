@@ -76,19 +76,19 @@ dt { color: #a994c0; } dd { margin: 0; text-align: right; color: #79e7bc; }
 .touch-button { min-height: 45px; padding: 8px; box-shadow: none; background: #4d3370; border: 1px solid #8366a4; touch-action: none; }
 .dpad-center { opacity: .45; pointer-events: none; }
 .shoulders, .face, .system { display: flex; gap: 6px; }.face { justify-content: end; }.face .touch-button { border-radius: 50%; min-width: 52px; }.system { grid-column: 1 / -1; }.system .touch-button { flex: 1; font-size: 11px; }
-@media (max-width: 760px) { .play-layout { grid-template-columns: 1fr; } .game-shell { padding-top: 22px; } .screen-card { padding: 9px; } .game-shell aside { order: 2; } .invite-row { align-items: stretch; flex-direction: column; } }
+@media (max-width: 760px), (orientation: landscape) and (max-height: 600px) { .play-layout { grid-template-columns: 1fr; } .game-shell { padding-top: 22px; } .screen-card { padding: 9px; } .game-shell aside { order: 2; } .invite-row { align-items: stretch; flex-direction: column; } }
 @media (min-width: 900px) {
   .home { width: min(1180px, calc(100% - 64px)); max-width: 1180px; grid-template-columns: minmax(0, 1.35fr) minmax(300px, .65fr); align-content: start; padding: 56px 0; gap: 22px; }
   .home > .brand, .home > .library, .home > footer { grid-column: 1 / -1; }
   .home > .brand { text-align: left; }.home > .brand h1 { font-size: 62px; }.home > .account-card { grid-column: 2; grid-row: 2; align-self: start; }.home > .home-card { grid-column: 1; grid-row: 2; }.home > .library { grid-row: 3; }
   .library { padding: 24px; }.library-heading h2 { font-size: 32px; }.game-row { grid-template-columns: minmax(260px, .65fr) minmax(0, 1.35fr); align-items: center; }.game-row-heading { display: contents; }.game-row-heading > div { align-self: start; }.game-row-heading .load-game-button { grid-column: 2; grid-row: 1; justify-self: end; }.game-row .save-tools { grid-column: 2; grid-row: 2; }.game-row .save-list { grid-column: 1 / -1; }
 }
-@media (max-width: 760px) and (orientation: landscape) { .game-shell { width: min(100% - 20px, 980px); padding: 12px 0; } .game-shell header { margin-bottom: 10px; } .game-shell header h1 { font-size: 28px; } .play-layout { grid-template-columns: minmax(0, 1fr) 250px; gap: 12px; align-items: center; } .game-shell aside { order: initial; max-height: calc(100vh - 70px); overflow: auto; } .screen-card { padding: 7px; } .screen-caption { padding-top: 6px; } }
+@media (orientation: landscape) and (max-width: 760px), (orientation: landscape) and (max-height: 600px) { .game-shell { width: min(100% - 20px, 980px); padding: 12px 0; } .game-shell header { margin-bottom: 10px; } .game-shell header h1 { font-size: 28px; } .play-layout { grid-template-columns: minmax(0, 1fr) 250px; gap: 12px; align-items: center; } .game-shell aside { order: initial; max-height: calc(100vh - 70px); overflow: auto; } .screen-card { padding: 7px; } .screen-caption { padding-top: 6px; } }
 @media (orientation: portrait) and (max-width: 760px) { .game-shell { padding-bottom: 20px; } }
 
 /* The game view becomes a focused, full-screen controller on phones. Keep the
    desktop layout unchanged and let the canvas remain the visual priority. */
-@media (max-width: 760px) {
+@media (max-width: 760px), (orientation: landscape) and (max-height: 600px) {
   body:has(.game-shell) { overflow: hidden; }
   .game-shell { width: 100%; max-width: none; min-height: 100dvh; height: 100dvh; padding: 0; }
   .game-shell > header { position: fixed; top: max(10px, env(safe-area-inset-top)); left: max(10px, env(safe-area-inset-left)); right: max(10px, env(safe-area-inset-right)); z-index: 30; margin: 0; pointer-events: none; }
@@ -124,7 +124,7 @@ dt { color: #a994c0; } dd { margin: 0; text-align: right; color: #79e7bc; }
   .system .touch-button:first-child { border-radius: 10px 0 0 10px; }
   .system .touch-button:last-child { border-radius: 0 10px 10px 0; }
 }
-@media (max-width: 760px) and (orientation: landscape) {
+@media (orientation: landscape) and (max-width: 760px), (orientation: landscape) and (max-height: 600px) {
   .game-shell, .play-layout, .screen-card, .screen-stage { min-height: 100svh; height: 100dvh; }
   .game-shell { width: 100%; }
   .game-shell > header { top: 8px; left: 50%; right: auto; transform: translateX(-50%); }
@@ -151,7 +151,7 @@ dt { color: #a994c0; } dd { margin: 0; text-align: right; color: #79e7bc; }
   .shoulders { top: max(62px, calc(env(safe-area-inset-top) + 52px)); }
   .touch-controls .touch-button { box-shadow: 0 6px 18px rgba(0, 0, 0, .24), inset 0 0 0 1px rgba(0, 0, 0, .08); }
 }
-@media (max-width: 760px) and (orientation: landscape) {
+@media (orientation: landscape) and (max-width: 760px), (orientation: landscape) and (max-height: 600px) {
   /* Landscape is an uncluttered game-only surface, matching a handheld layout. */
   .game-shell > header, .game-shell .screen-caption { display: none; }
   .screen-stage { background: #000; }
