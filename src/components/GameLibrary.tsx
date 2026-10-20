@@ -1,0 +1,18 @@
+import { useEffect, useState } from 'react';
+import type { GameRecord, SaveRecord } from '../lib/cloudSaves';
+import { deleteSave, downloadSave, listGames, listSaves, uploadSave } from '../lib/cloudSaves';
+
+export function GameLibrary({ userId, refreshKey = 0 }: { userId: string | null; refreshKey?: number }) {
+  const [games, setGames] = useState<GameRecord[]>([]); const [message, setMessage] = useState(''); const [saving, setSaving] = useState(false);
+  useEffect(() => { if (!userId) { setGames([]); return; } void listGames(userId).then(setGames).catch((error) => setMessage(error.message)); }, [userId, refreshKey]);
+  if (!userId) return null;
+  const backup = async (save: SaveRecord) => { const bytes = await downloadSave(save); const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' })); const link = document.createElement('a'); link.href = url; link.download = `${save.save_type}-player-${save.player_slot}-r${save.revision}.bin`; link.click(); URL.revokeObjectURL(url); };
+  const importSave = async (game: GameRecord, file: File, saveType: 'battery' | 'state', playerSlot: number) => { if (!userId) return; setSaving(true); setMessage('Uploading save…'); try { await uploadSave(userId, game.id, playerSlot, saveType, await file.arrayBuffer()); setMessage('Save uploaded.'); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } finally { setSaving(false); } };
+  return <section className="library"><div className="library-heading"><div><p className="eyebrow">YOUR CLOUD LIBRARY</p><h2>My Games</h2></div><span className="muted">ROM stays on your device</span></div>{games.length === 0 ? <p className="muted">No imported games yet. Load a local ROM while signed in.</p> : games.map((game) => <GameRow key={game.id} game={game} onBackup={backup} onDelete={async (save) => { await deleteSave(save); setMessage('Save deleted.'); }} onImport={importSave} saving={saving} />)}{message && <p className="status">{message}</p>}</section>;
+}
+
+function GameRow({ game, onBackup, onDelete, onImport, saving }: { game: GameRecord; onBackup: (save: SaveRecord) => Promise<void>; onDelete: (save: SaveRecord) => Promise<void>; onImport: (game: GameRecord, file: File, type: 'battery' | 'state', slot: number) => Promise<void>; saving: boolean }) {
+  const [saves, setSaves] = useState<SaveRecord[]>([]); const [type, setType] = useState<'battery' | 'state'>('battery'); const [slot, setSlot] = useState(1);
+  useEffect(() => { void listSaves(game.user_id, game.id).then(setSaves).catch(() => undefined); }, [game]);
+  return <article className="game-row"><div><strong>{game.title}</strong><p className="muted">Imported {new Date(game.imported_at).toLocaleDateString()}</p></div><div className="save-tools"><select value={type} onChange={(e) => setType(e.target.value as 'battery' | 'state')}><option value="battery">Battery save</option><option value="state">Save state</option></select><select value={slot} onChange={(e) => setSlot(Number(e.target.value))}><option value="1">Player 1</option><option value="2">Player 2</option></select><label className="file-button">Import save<input type="file" accept=".sav,.bin,.state" disabled={saving} onChange={(e) => e.target.files?.[0] && void onImport(game, e.target.files[0], type, slot)} /></label></div>{saves.length > 0 && <ul className="save-list">{saves.map((save) => <li key={save.id}><span>{save.save_type} · P{save.player_slot} · revision {save.revision}</span><button className="link-button" onClick={() => void onBackup(save)}>Export</button><button className="link-button danger" onClick={() => void onDelete(save)}>Delete</button></li>)}</ul>}</article>;
+}

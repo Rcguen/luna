@@ -1,0 +1,14 @@
+import { useEffect, useState } from 'react';
+import type { Session } from '@supabase/supabase-js';
+import { supabase, supabaseConfigured, supabaseSetupMessage } from '../lib/supabase';
+
+export function AuthPanel({ onSession }: { onSession: (session: Session | null) => void }) {
+  const [session, setSession] = useState<Session | null>(null);
+  const [email, setEmail] = useState(''); const [password, setPassword] = useState(''); const [mode, setMode] = useState<'sign-in' | 'sign-up'>('sign-in'); const [message, setMessage] = useState(''); const [busy, setBusy] = useState(false);
+  useEffect(() => { if (!supabase) return; void supabase.auth.getSession().then(({ data }) => { setSession(data.session); onSession(data.session); }); const { data } = supabase.auth.onAuthStateChange((_event, next) => { setSession(next); onSession(next); }); return () => data.subscription.unsubscribe(); }, [onSession]);
+  if (!supabaseConfigured) return <div className="account-card"><strong>Cloud library</strong><p className="muted">{supabaseSetupMessage}</p><p className="muted">Create a Supabase project, apply the migration, then add the values to `.env.local` for local development and GitHub Actions secrets for deployment.</p></div>;
+  if (session) return <div className="account-card"><strong>Signed in</strong><span className="muted">{session.user.email}</span><button className="secondary" onClick={() => void supabase?.auth.signOut()}>Sign out</button></div>;
+  const submit = async () => { setBusy(true); setMessage(''); const result = mode === 'sign-in' ? await supabase?.auth.signInWithPassword({ email, password }) : await supabase?.auth.signUp({ email, password }); setBusy(false); setMessage(result?.error?.message || (mode === 'sign-up' ? 'Check your email to confirm the account.' : 'Signed in.')); };
+  const reset = async () => { if (!email) { setMessage('Enter your email first.'); return; } const result = await supabase?.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin + window.location.pathname }); setMessage(result?.error?.message || 'Password reset email requested.'); };
+  return <div className="account-card"><strong>{mode === 'sign-in' ? 'Sign in to cloud saves' : 'Create a Luna account'}</strong><input type="email" placeholder="EMAIL" value={email} onChange={(e) => setEmail(e.target.value)} /><input type="password" placeholder="PASSWORD" value={password} onChange={(e) => setPassword(e.target.value)} /><button disabled={busy} onClick={() => void submit()}>{busy ? 'Working…' : mode === 'sign-in' ? 'Sign in' : 'Sign up'}</button><div className="account-actions"><button className="link-button" onClick={() => setMode(mode === 'sign-in' ? 'sign-up' : 'sign-in')}>{mode === 'sign-in' ? 'Create account' : 'Have an account?'}</button>{mode === 'sign-in' && <button className="link-button" onClick={() => void reset()}>Reset password</button>}</div>{message && <p className="status">{message}</p>}</div>;
+}

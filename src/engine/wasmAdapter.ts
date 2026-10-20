@@ -23,6 +23,10 @@ type WasmModule = {
   _mgs_get_audio(): number;
   _mgs_audio_frames(): number;
   _mgs_get_audio_rate?(): number;
+  _mgs_save_state(player: number): number;
+  _mgs_state_ptr(): number;
+  _mgs_load_state_bytes(player: number, ptr: number, size: number): number;
+  _mgs_reset_sio?(): void;
   _mgs_quit(): void;
 };
 
@@ -98,6 +102,22 @@ export class GbaEngine {
   }
 
   setKeys(player: number, keys: number): void { this.requireModule()._mgs_set_keys(player, keys >>> 0); }
+
+  supportsStateSave(): boolean { return Boolean(this.module?._mgs_save_state && this.module?._mgs_load_state_bytes); }
+
+  exportState(player: number): ArrayBuffer {
+    const module = this.requireModule(); const size = module._mgs_save_state(player); const ptr = module._mgs_state_ptr();
+    if (!size || !ptr) throw new Error('The emulator could not create a save state.');
+    return module.HEAPU8.slice(ptr, ptr + size).buffer;
+  }
+
+  importState(player: number, bytes: ArrayBuffer): void {
+    const module = this.requireModule(); const ptr = module._malloc(bytes.byteLength);
+    if (!ptr) throw new Error('The emulator could not allocate save-state memory.');
+    try { module.HEAPU8.set(new Uint8Array(bytes), ptr); if (module._mgs_load_state_bytes(player, ptr, bytes.byteLength) !== 0) throw new Error('The emulator rejected the save state.'); }
+    finally { module._free(ptr); }
+    module._mgs_reset_sio?.();
+  }
 
   drainAudio(): EngineAudio | null {
     const module = this.requireModule();

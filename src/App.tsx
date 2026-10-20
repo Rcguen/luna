@@ -2,6 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import { GbaEngine, type EngineFrame } from './engine/wasmAdapter';
 import { PeerSession, type Diagnostics } from './netplay/peerSession';
 import { TouchControls } from './components/TouchControls';
+import { AuthPanel } from './components/AuthPanel';
+import { GameLibrary } from './components/GameLibrary';
+import { registerGame, type GameRecord } from './lib/cloudSaves';
+import type { Session } from '@supabase/supabase-js';
 import type { AudioMessage, FrameMessage } from './netplay/protocol';
 import './styles.css';
 
@@ -17,11 +21,15 @@ export default function App() {
   const [status, setStatus] = useState('Ready for a two-player session.');
   const [romName, setRomName] = useState('No ROM loaded');
   const [romLoaded, setRomLoaded] = useState(false);
+  const [session, setSession] = useState<Session | null>(null);
+  const [currentGame, setCurrentGame] = useState<GameRecord | null>(null);
+  const [libraryRefresh, setLibraryRefresh] = useState(0);
   const [pendingGuest, setPendingGuest] = useState(false);
   const [approved, setApproved] = useState(false);
   const [diagnostics, setDiagnostics] = useState(EMPTY_DIAGNOSTICS);
   const [guestFrame, setGuestFrame] = useState<FrameMessage | null>(null);
   const engineRef = useRef<GbaEngine | null>(null);
+  const romBytesRef = useRef<Uint8Array | null>(null);
   const sessionRef = useRef<PeerSession | null>(null);
   const hostCanvas = useRef<HTMLCanvasElement>(null);
   const guestCanvas = useRef<HTMLCanvasElement>(null);
@@ -53,7 +61,8 @@ export default function App() {
   const startHost = async () => {
     try {
       setStatus('Starting the linked host engine…');
-      await newEngine();
+      const engine = await newEngine();
+      if (romBytesRef.current) engine.loadRom(romBytesRef.current);
       const session = new PeerSession(makeEvents(true));
       sessionRef.current = session;
       audioContext.current = new AudioContext();
@@ -83,9 +92,13 @@ export default function App() {
     try {
       if (!engineRef.current) await newEngine();
       const bytes = new Uint8Array(await file.arrayBuffer());
+      romBytesRef.current = bytes;
       engineRef.current?.loadRom(bytes);
       setRomName(file.name);
       setRomLoaded(true);
+      if (session) {
+        try { setCurrentGame(await registerGame(session.user.id, file.name, bytes)); setLibraryRefresh((value) => value + 1); } catch (error) { setStatus(`ROM loaded locally; cloud metadata unavailable: ${error instanceof Error ? error.message : String(error)}`); }
+      }
       setStatus('ROM loaded. The host can now start emulation.');
     } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
   };
@@ -158,7 +171,7 @@ export default function App() {
 
   useEffect(() => () => { sessionRef.current?.close(); engineRef.current?.stop(); }, []);
 
-  const leave = () => { sessionRef.current?.close(); engineRef.current?.stop(); sessionRef.current = null; engineRef.current = null; setRomLoaded(false); setScreen('home'); setStatus('Session ended.'); };
+  const leave = () => { sessionRef.current?.close(); engineRef.current?.stop(); sessionRef.current = null; engineRef.current = null; romBytesRef.current = null; setRomLoaded(false); setScreen('home'); setStatus('Session ended.'); };
 
   if (screen === 'host') return <GameShell title="Host room" subtitle={`Room ${formatCode(roomCode)}`} canvasRef={hostCanvas} local>
     <div className="room-code">{formatCode(roomCode)}</div><p className="muted">Share this code. The guest still needs your approval.</p>
@@ -168,7 +181,7 @@ export default function App() {
 
   if (screen === 'guest') return <GameShell title="Guest Player 2" subtitle={`Room ${formatCode(roomCode)}`} canvasRef={guestCanvas}><StatusPanel diagnostics={diagnostics} status={status} /><TouchControls onKeys={(keys) => sessionRef.current?.sendInput(keys)} /><button className="secondary" onClick={leave}>Disconnect</button></GameShell>;
 
-  return <main className="home"><div className="brand"><span className="star">✦</span><p className="eyebrow">ONLINE GBA ADVENTURES</p><h1>Kirby Online</h1><p className="lede">Two linked players. One shared adventure.</p></div><section className="home-card"><button onClick={startHost}>Create room <span>→</span></button><div className="join-row"><input inputMode="numeric" maxLength={6} placeholder="ROOM CODE" value={room} onChange={(e) => setRoom(e.target.value.replace(/\D/g, ''))} /><button className="secondary" onClick={joinRoom}>Join</button></div><label className="file-button home-file">Load ROM for host<input type="file" accept=".gba,.gb,.gbc" onChange={(e) => e.target.files?.[0] && loadRom(e.target.files[0])} /></label><p className="status">{status}</p></section><footer>Host runs both linked consoles. Guests receive Player 2 video and send Player 2 controls.</footer></main>;
+  return <main className="home"><div className="brand"><span className="star">✦</span><p className="eyebrow">ONLINE GBA ADVENTURES</p><h1>Kirby Online</h1><p className="lede">Two linked players. One shared adventure.</p></div><AuthPanel onSession={setSession} /><section className="home-card"><button onClick={startHost}>Create room <span>→</span></button><div className="join-row"><input inputMode="numeric" maxLength={6} placeholder="ROOM CODE" value={room} onChange={(e) => setRoom(e.target.value.replace(/\D/g, ''))} /><button className="secondary" onClick={joinRoom}>Join</button></div><label className="file-button home-file">Load ROM for host<input type="file" accept=".gba,.gb,.gbc" onChange={(e) => e.target.files?.[0] && loadRom(e.target.files[0])} /></label><p className="status">{status}</p></section><GameLibrary userId={session?.user.id || null} refreshKey={libraryRefresh} /><footer>Host runs both linked consoles. Guests receive Player 2 video and send Player 2 controls. Guests may join without an account.</footer></main>;
 }
 
 function drawFrame(canvas: HTMLCanvasElement | null, frame: EngineFrame) { if (!canvas) return; canvas.width = frame.width; canvas.height = frame.height; const image = new ImageData(frame.width, frame.height); image.data.set(frame.rgba); canvas.getContext('2d')?.putImageData(image, 0, 0); }
