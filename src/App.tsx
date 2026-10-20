@@ -25,6 +25,7 @@ export default function App() {
   const [status, setStatus] = useState('Ready for a 2-player session.');
   const [romName, setRomName] = useState('No ROM loaded');
   const [romLoaded, setRomLoaded] = useState(false);
+  const [romLoading, setRomLoading] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const [currentGame, setCurrentGame] = useState<GameRecord | null>(null);
   const [libraryRefresh, setLibraryRefresh] = useState(0);
@@ -81,6 +82,8 @@ export default function App() {
 
   const startHost = async () => {
     try {
+      if (romLoading) { setStatus('ROM is still loading. Please wait a moment.'); return; }
+      if (!romBytesRef.current) { setStatus('Load your legal ROM before creating a room.'); return; }
       setStatus('Starting the linked host engine…');
       const engine = await newEngine(roomCapacity);
       if (romBytesRef.current) engine.loadRom(romBytesRef.current);
@@ -96,6 +99,7 @@ export default function App() {
 
   const startSolo = async () => {
     try {
+      if (romLoading) { setStatus('ROM is still loading. Please wait a moment.'); return; }
       if (!romBytesRef.current) { setStatus('Select your legal ROM first.'); return; }
       setStatus('Starting solo emulator…');
       await ensureAudio();
@@ -121,10 +125,14 @@ export default function App() {
   };
 
   const loadRom = async (file: File) => {
+    setRomLoading(true);
+    setStatus(`Loading ${file.name}…`);
     try {
-      if (!engineRef.current) await newEngine();
       const bytes = new Uint8Array(await file.arrayBuffer());
+      // Publish the bytes before the asynchronous WASM startup so a fast
+      // click on Create room/Play solo cannot observe a false empty state.
       romBytesRef.current = bytes;
+      if (!engineRef.current) await newEngine();
       engineRef.current?.loadRom(bytes);
       setRomName(file.name);
       setRomLoaded(true);
@@ -132,7 +140,8 @@ export default function App() {
         try { setCurrentGame(await registerGame(session.user.id, file.name, bytes)); setLibraryRefresh((value) => value + 1); } catch (error) { setStatus(`ROM loaded locally; cloud metadata unavailable: ${error instanceof Error ? error.message : String(error)}`); }
       }
       setStatus('ROM loaded. The host can now start emulation.');
-    } catch (error) { engineRef.current?.fail(error); setEngineStatus(engineRef.current?.diagnostics() || EMPTY_ENGINE); setStatus(`ROM load failed: ${error instanceof Error ? error.message : String(error)}`); }
+    } catch (error) { romBytesRef.current = null; engineRef.current?.fail(error); setEngineStatus(engineRef.current?.diagnostics() || EMPTY_ENGINE); setStatus(`ROM load failed: ${error instanceof Error ? error.message : String(error)}`); }
+    finally { setRomLoading(false); }
   };
 
   useEffect(() => {
@@ -219,7 +228,7 @@ export default function App() {
   useEffect(() => () => { sessionRef.current?.close(); engineRef.current?.stop(); }, []);
 
   const startGame = () => { if (!romLoaded) { setStatus('Load your legal ROM before starting.'); return; } setGameStarted(true); setStatus(Object.values(playerStates).slice(1, roomCapacity).some((state) => state !== 'connected') ? 'Game running; waiting for remaining guest seats.' : 'Game started.'); };
-  const leave = () => { sessionRef.current?.close(); engineRef.current?.stop(); sessionRef.current = null; engineRef.current = null; romBytesRef.current = null; setEngineStatus(EMPTY_ENGINE); setRomLoaded(false); setGameStarted(false); setPendingGuest(null); setApproved(false); setAssignedSlot(null); setScreen('home'); setStatus(`Ready for a ${roomCapacity}-player session.`); };
+  const leave = () => { sessionRef.current?.close(); engineRef.current?.stop(); sessionRef.current = null; engineRef.current = null; romBytesRef.current = null; setEngineStatus(EMPTY_ENGINE); setRomLoaded(false); setRomLoading(false); setGameStarted(false); setPendingGuest(null); setApproved(false); setAssignedSlot(null); setScreen('home'); setStatus(`Ready for a ${roomCapacity}-player session.`); };
   const inviteLink = roomCode ? `${window.location.origin}${window.location.pathname}?room=${roomCode}` : '';
   const copyInvite = async () => { if (!inviteLink) return; await navigator.clipboard?.writeText(inviteLink); setStatus('Invite link copied.'); };
 
@@ -234,7 +243,7 @@ export default function App() {
 
   if (screen === 'guest') return <GameShell title={`Guest Player ${assignedSlot || '…'}`} subtitle={`${roomCapacity}-player room · ${formatCode(roomCode)}`} canvasRef={guestCanvas}><StatusPanel diagnostics={diagnostics} status={status} /><TouchControls onKeys={(keys) => sessionRef.current?.sendInput(keys)} /><button className="secondary" onClick={leave}>Disconnect</button></GameShell>;
 
-  return <main className="home"><div className="brand"><span className="star" aria-hidden="true">✦</span><p className="eyebrow">ONLINE GBA ADVENTURES</p><h1>Luna</h1><p className="lede">Two linked players. One shared adventure.</p></div><AuthPanel onSession={setSession} /><section className="home-card" aria-labelledby="play-heading"><p id="play-heading" className="eyebrow">PLAY</p><label className="muted" htmlFor="room-capacity">Players per room</label><select id="room-capacity" value={roomCapacity} onChange={(e) => { const value = Number(e.target.value); setRoomCapacity(value); setStatus(`Ready for a ${value}-player session.`); }}><option value="2">2 players</option><option value="3">3 players</option><option value="4">4 players</option></select><label className="file-button home-file">Load ROM<input aria-label="Load a legal ROM" type="file" accept=".gba,.gb,.gbc" onChange={(e) => e.target.files?.[0] && loadRom(e.target.files[0])} /></label><button className="secondary" onClick={startSolo}>Play solo</button><button onClick={startHost}>Create room <span aria-hidden="true">→</span></button><div className="join-row"><input aria-label="Six-digit room code" inputMode="numeric" maxLength={6} placeholder="ROOM CODE" value={room} onChange={(e) => setRoom(e.target.value.replace(/\D/g, ''))} /><button className="secondary" onClick={joinRoom}>Join</button></div><p className="status" role="status">{status}</p></section><GameLibrary userId={session?.user.id || null} refreshKey={libraryRefresh} /><footer>Host runs {roomCapacity} linked consoles. Each guest receives only their assigned Player 2–4 video and sends only their assigned controls. Guests may join without an account.</footer></main>;
+  return <main className="home"><div className="brand"><span className="star" aria-hidden="true">✦</span><p className="eyebrow">ONLINE GBA ADVENTURES</p><h1>Luna</h1><p className="lede">Two linked players. One shared adventure.</p></div><AuthPanel onSession={setSession} /><section className="home-card" aria-labelledby="play-heading"><p id="play-heading" className="eyebrow">PLAY</p><label className="muted" htmlFor="room-capacity">Players per room</label><select id="room-capacity" value={roomCapacity} onChange={(e) => { const value = Number(e.target.value); setRoomCapacity(value); setStatus(`Ready for a ${value}-player session.`); }}><option value="2">2 players</option><option value="3">3 players</option><option value="4">4 players</option></select><label className="file-button home-file">{romLoading ? 'Loading ROM…' : 'Load ROM'}<input aria-label="Load a legal ROM" type="file" accept=".gba,.gb,.gbc" disabled={romLoading} onChange={(e) => e.target.files?.[0] && loadRom(e.target.files[0])} /></label><button className="secondary" onClick={startSolo} disabled={romLoading}>{romLoading ? 'Loading ROM…' : 'Play solo'}</button><button onClick={startHost} disabled={romLoading}>{romLoading ? 'Loading ROM…' : 'Create room'} <span aria-hidden="true">→</span></button><div className="join-row"><input aria-label="Six-digit room code" inputMode="numeric" maxLength={6} placeholder="ROOM CODE" value={room} onChange={(e) => setRoom(e.target.value.replace(/\D/g, ''))} /><button className="secondary" onClick={joinRoom}>Join</button></div><p className="status" role="status">{status}</p></section><GameLibrary userId={session?.user.id || null} refreshKey={libraryRefresh} /><footer>Host runs {roomCapacity} linked consoles. Each guest receives only their assigned Player 2–4 video and sends only their assigned controls. Guests may join without an account.</footer></main>;
 }
 
 function drawFrame(canvas: HTMLCanvasElement | null, frame: EngineFrame) { if (!canvas) return; canvas.width = frame.width; canvas.height = frame.height; const image = new ImageData(frame.width, frame.height); image.data.set(frame.rgba); canvas.getContext('2d')?.putImageData(image, 0, 0); }
