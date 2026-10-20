@@ -13,6 +13,7 @@ import './styles.css';
 type Screen = 'home' | 'solo' | 'host' | 'guest';
 const EMPTY_DIAGNOSTICS: Diagnostics = { signaling: 'idle', connection: 'idle', ice: 'idle', gathering: 'idle', candidate: 'idle', channel: 'idle', rtt: null, fps: null, error: '' };
 const EMPTY_ENGINE: EngineDiagnostics = { wasm: 'idle', emulator: 'idle', rom: 'waiting', framesExecuted: 0, framesRendered: 0, lastFrame: '0×0', audioFrames: 0, audioBatches: 0, audioRate: 32768, error: '' };
+let audioNextTime = 0;
 
 function formatCode(code: string) { return code ? `${code.slice(0, 3)} ${code.slice(3)}` : '------'; }
 
@@ -41,7 +42,6 @@ export default function App() {
   const hostCanvas = useRef<HTMLCanvasElement>(null);
   const guestCanvas = useRef<HTMLCanvasElement>(null);
   const audioContext = useRef<AudioContext | null>(null);
-  const audioNextTime = useRef(0);
   const guestKeys = useRef(0);
   const lastEngineUpdate = useRef(0);
 
@@ -62,6 +62,7 @@ export default function App() {
   const ensureAudio = async () => {
     if (!audioContext.current) {
       audioContext.current = new AudioContext();
+      audioNextTime = 0;
       (window as Window & { kirbyAudio?: AudioContext }).kirbyAudio = audioContext.current;
     }
     await audioContext.current.resume().catch(() => undefined);
@@ -253,8 +254,8 @@ function playPcm(rate: number, samples: Int16Array) {
   for (let i = 0; i < frames; i++) { left[i] = samples[i * 2] / 32768; right[i] = samples[i * 2 + 1] / 32768; }
   buffer.copyToChannel(left, 0); buffer.copyToChannel(right, 1);
   const source = context.createBufferSource(); source.buffer = buffer; source.connect(context.destination);
-  const start = Math.max(context.currentTime + 0.02, audioNextTime.current);
-  source.start(start); audioNextTime.current = start + buffer.duration;
+  const start = Math.max(context.currentTime + 0.02, audioNextTime);
+  source.start(start); audioNextTime = start + buffer.duration;
 }
 
 function GameShell({ title, subtitle, canvasRef, children, local = false, badge }: { title: string; subtitle: string; canvasRef: React.RefObject<HTMLCanvasElement>; children: React.ReactNode; local?: boolean; badge?: string }) { return <main className="game-shell"><header><div><p className="eyebrow">LUNA ONLINE</p><h1>{title}</h1><p className="muted">{subtitle}</p></div><span className={`live-dot ${local ? 'host' : ''}`}>{badge || (local ? 'HOST' : 'GUEST')}</span></header><section className="play-layout"><div className="screen-card"><canvas ref={canvasRef} aria-label={local ? 'Player 1 game screen' : 'Player 2 remote game screen'} /><div className="screen-caption">{local ? 'PLAYER 1 · LOCAL' : 'PLAYER 2 · REMOTE'}</div></div><aside>{children}</aside></section></main>; }
