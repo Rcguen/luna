@@ -57,6 +57,8 @@ canvas { display: block; width: 100%; aspect-ratio: 3 / 2; image-rendering: pixe
 .screen-overlay { position: absolute; inset: 0; display: grid; place-content: center; gap: 7px; padding: 24px; text-align: center; background: rgba(8, 5, 18, .86); color: #fff; font-weight: 800; pointer-events: none; }
 .screen-overlay small { color: #bca9d0; font-size: 12px; font-weight: 600; }
 aside { display: grid; gap: 14px; }
+.host-tools { display: grid; gap: 14px; }
+.host-tools-toggle { display: none; }
 .room-code { font-size: 42px; font-weight: 900; letter-spacing: .16em; color: #ffd94e; }
 .approval, .status-panel { background: #211239; border: 1px solid #624680; border-radius: 16px; padding: 16px; }
 .approval { display: grid; gap: 14px; }
@@ -107,6 +109,10 @@ dt { color: #a994c0; } dd { margin: 0; text-align: right; color: #79e7bc; }
   .game-shell aside { position: absolute; inset: 0; z-index: 20; display: block; pointer-events: none; }
   .game-shell aside > * { pointer-events: auto; }
   .game-shell .engine-panel, .game-shell .network-panel { display: none; }
+  .host-tools-toggle { position: fixed; top: max(10px, env(safe-area-inset-top)); right: max(10px, env(safe-area-inset-right)); z-index: 60; display: none; padding: 9px 13px; border: 1px solid rgba(255, 255, 255, .3); border-radius: 999px; background: rgba(255, 255, 255, .12); box-shadow: none; color: #fff; font-size: 12px; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+  .role-host .host-tools-toggle { display: block; }
+  .role-host .host-tools { display: none; }
+  .role-host .host-tools.is-open { position: fixed; top: 58px; right: max(10px, env(safe-area-inset-right)); bottom: max(58px, env(safe-area-inset-bottom)); left: max(10px, env(safe-area-inset-left)); z-index: 55; display: grid; overflow: auto; padding: 12px; border: 1px solid rgba(255, 255, 255, .24); border-radius: 18px; background: rgba(22, 13, 44, .9); box-shadow: 0 18px 45px rgba(0, 0, 0, .32); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); pointer-events: auto; }
   .game-shell aside > button.secondary { position: fixed; top: max(10px, env(safe-area-inset-top)); left: max(10px, env(safe-area-inset-left)); z-index: 45; width: 38px; height: 38px; padding: 0; font-size: 0; border-radius: 999px; background: rgba(255, 255, 255, .1); border: 1px solid rgba(255, 255, 255, .28); color: #fff; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
   .game-shell aside > button.secondary::before { content: '×'; font-size: 24px; font-weight: 400; }
   .touch-controls { position: fixed; inset: 0; z-index: 40; display: block; padding: 0; pointer-events: none; }
@@ -170,5 +176,7 @@ dt { color: #a994c0; } dd { margin: 0; text-align: right; color: #79e7bc; }
   .face { display: flex; flex-direction: column; gap: clamp(8px, 2vh, 14px); bottom: max(54px, calc(env(safe-area-inset-bottom) + 46px)); }
   .face .touch-button { flex: 0 0 auto; }
   .face .touch-button:first-child { order: 2; }
+  .role-host aside > .host-tools-toggle { top: max(8px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right)); display: block; }
+  .role-host .host-tools.is-open { top: 42px; right: 12px; bottom: 48px; left: 12px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; } }

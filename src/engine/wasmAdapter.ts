@@ -150,8 +150,12 @@ export class GbaEngine {
     module._mgs_reset_sio?.();
   }
 
-  drainAudio(): EngineAudio | null {
+  drainAudio(source = 1): EngineAudio | null {
     const module = this.requireModule();
+    // The web wrapper exposes one complete stereo mix per GBA instance.
+    // Select the source immediately before draining so a host can keep
+    // Player 1 locally while sending each guest its own player's mix.
+    module._mgs_set_audio_source?.(source);
     const ptr = module._mgs_get_audio();
     const frames = module._mgs_audio_frames();
     this.state.audioFrames = frames;

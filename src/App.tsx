@@ -16,6 +16,10 @@ type StreamQuality = 'auto' | 'smooth' | 'balanced' | 'sharp';
 const EMPTY_DIAGNOSTICS: Diagnostics = { signaling: 'idle', connection: 'idle', ice: 'idle', gathering: 'idle', candidate: 'idle', channel: 'idle', rtt: null, fps: null, error: '' };
 const EMPTY_ENGINE: EngineDiagnostics = { wasm: 'idle', emulator: 'idle', rom: 'waiting', framesExecuted: 0, framesRendered: 0, lastFrame: '0×0', audioFrames: 0, audioBatches: 0, audioRate: 32768, error: '' };
 let audioNextTime = 0;
+
+function resetAudioClock() {
+  audioNextTime = 0;
+}
 const lastGameKey = (userId: string) => `luna:last-game:${userId}`;
 
 function formatCode(code: string) { return code ? `${code.slice(0, 3)} ${code.slice(3)}` : '------'; }
@@ -63,6 +67,7 @@ export default function App() {
   const [engineStatus, setEngineStatus] = useState(EMPTY_ENGINE);
   const [guestHasVideo, setGuestHasVideo] = useState(false);
   const [streamQuality, setStreamQuality] = useState<StreamQuality>('auto');
+  const [hostPanelOpen, setHostPanelOpen] = useState(false);
   const engineRef = useRef<GbaEngine | null>(null);
   const romBytesRef = useRef<Uint8Array | null>(null);
   const sessionRef = useRef<MultiPeerSession | null>(null);
@@ -94,7 +99,7 @@ export default function App() {
   const ensureAudio = async () => {
     if (!audioContext.current) {
       audioContext.current = new AudioContext();
-      audioNextTime = 0;
+      resetAudioClock();
       (window as Window & { kirbyAudio?: AudioContext }).kirbyAudio = audioContext.current;
     }
     await audioContext.current.resume().catch(() => undefined);
@@ -288,10 +293,21 @@ export default function App() {
         }
         lastSent = now;
       }
-      const audio = engine.drainAudio();
-      if (audio) {
-        playPcm(audio.rate, audio.samples);
-        if (shouldSend) for (let slot = 2; slot <= roomCapacity; slot += 1) sessionRef.current?.sendAudio(slot as PlayerSlot, { type: 'audio', rate: audio.rate, data: audio.samples.buffer as ArrayBuffer });
+      if (screen === 'host') {
+        const connectedSlots = new Set(activeSession?.connectedSlots() || []);
+        for (let slot = 2; slot <= roomCapacity; slot += 1) {
+          const playerSlot = slot as PlayerSlot;
+          const remoteAudio = engine.drainAudio(playerSlot);
+          if (remoteAudio && approved && activeSession && connectedSlots.has(playerSlot)) {
+            activeSession.sendAudio(playerSlot, { type: 'audio', rate: remoteAudio.rate, data: remoteAudio.samples.buffer as ArrayBuffer });
+          }
+        }
+      }
+      const localAudio = engine.drainAudio(1);
+      if (localAudio) {
+        // Host hears only Player 1. Guests receive the mix for their own slot
+        // through the per-slot audio messages above.
+        playPcm(localAudio.rate, localAudio.samples);
       }
       if (now - lastEngineUpdate.current >= 250) { setEngineStatus(engine.diagnostics()); lastEngineUpdate.current = now; }
       raf = requestAnimationFrame(tick);
@@ -330,17 +346,21 @@ export default function App() {
   useEffect(() => () => { sessionRef.current?.close(); engineRef.current?.stop(); }, []);
 
   const startGame = () => { if (!romLoaded) { setStatus('Load your legal ROM before starting.'); return; } setGameStarted(true); setStatus(Object.values(playerStates).slice(1, roomCapacity).some((state) => state !== 'connected') ? 'Game running; waiting for remaining guest seats.' : 'Game started.'); };
-  const leave = () => { sessionRef.current?.close(); engineRef.current?.stop(); sessionRef.current = null; engineRef.current = null; romBytesRef.current = null; guestPendingFrame.current = null; setEngineStatus(EMPTY_ENGINE); setRomLoaded(false); setRomLoading(false); setGameStarted(false); setPendingGuest(null); setApproved(false); setAssignedSlot(null); setGuestHasVideo(false); setScreen('home'); setStatus(`Ready for a ${roomCapacity}-player session.`); };
+  const leave = () => { sessionRef.current?.close(); engineRef.current?.stop(); resetAudioClock(); sessionRef.current = null; engineRef.current = null; romBytesRef.current = null; guestPendingFrame.current = null; setEngineStatus(EMPTY_ENGINE); setRomLoaded(false); setRomLoading(false); setGameStarted(false); setPendingGuest(null); setApproved(false); setAssignedSlot(null); setGuestHasVideo(false); setHostPanelOpen(false); setScreen('home'); setStatus(`Ready for a ${roomCapacity}-player session.`); };
   const inviteLink = roomCode ? `${window.location.origin}${window.location.pathname}?room=${roomCode}` : '';
   const copyInvite = async () => { if (!inviteLink) return; await navigator.clipboard?.writeText(inviteLink); setStatus('Invite link copied.'); };
 
   if (screen === 'solo') return <GameShell role="solo" title="Solo game" subtitle={romName} canvasRef={hostCanvas} local badge="SOLO"><EngineStatusPanel status={engineStatus} /><TouchControls onKeys={(keys) => engineRef.current?.setKeys(0, keys)} /><button className="secondary" onClick={leave}>Exit game</button></GameShell>;
 
   if (screen === 'host') return <GameShell role="host" title="Host room" subtitle={`${roomCapacity}-player room · ${formatCode(roomCode)}`} canvasRef={hostCanvas} local>
-    <div className="room-code">{formatCode(roomCode)}</div><p className="muted">Share this code or the invite link. The guest still needs your approval.</p><div className="invite-row"><input aria-label="Invite link" readOnly value={inviteLink} /><button className="secondary" onClick={() => void copyInvite()}>Copy invite</button></div>
-    {pendingGuest && <div className="approval"><strong>Guest requests Player {pendingGuest.slot}</strong><div><button onClick={() => { pendingGuest.approve(); setPendingGuest(null); }}>Approve</button><button className="secondary" onClick={() => { pendingGuest.reject(); setPendingGuest(null); }}>Reject</button></div></div>}
-    <div className="lobby">{Array.from({ length: roomCapacity }, (_, index) => index + 1).map((slot) => <div key={slot}><span>Player {slot}{slot === 1 ? ' · Host' : ''}</span><strong>{playerStates[slot]}</strong></div>)}</div>
-    <StatusPanel diagnostics={diagnostics} status={status} /><EngineStatusPanel status={engineStatus} /><label className="quality-control">Stream quality<select value={streamQuality} onChange={(e) => setStreamQuality(e.target.value as StreamQuality)}><option value="auto">Auto</option><option value="smooth">Smooth · lower latency</option><option value="balanced">Balanced</option><option value="sharp">Sharp · higher quality</option></select></label><TouchControls onKeys={(keys) => engineRef.current?.setKeys(0, keys)} /><label className="file-button">{romLoaded ? `Change ROM (${romName})` : 'Load your legal ROM'}<input type="file" accept=".gba,.gb,.gbc" onChange={(e) => e.target.files?.[0] && loadRom(e.target.files[0])} /></label><button onClick={startGame} disabled={gameStarted}>{gameStarted ? 'Game running' : 'Start game'}</button><button className="secondary" onClick={leave}>End session</button>
+    <button className="host-tools-toggle" type="button" aria-expanded={hostPanelOpen} onClick={() => setHostPanelOpen((open) => !open)}>{hostPanelOpen ? 'Close' : 'Room'}</button>
+    <div className={`host-tools${hostPanelOpen ? ' is-open' : ''}`}>
+      <div className="room-code">{formatCode(roomCode)}</div><p className="muted">Share this code or the invite link. The guest still needs your approval.</p><div className="invite-row"><input aria-label="Invite link" readOnly value={inviteLink} /><button className="secondary" onClick={() => void copyInvite()}>Copy invite</button></div>
+      {pendingGuest && <div className="approval"><strong>Guest requests Player {pendingGuest.slot}</strong><div><button onClick={() => { pendingGuest.approve(); setPendingGuest(null); }}>Approve</button><button className="secondary" onClick={() => { pendingGuest.reject(); setPendingGuest(null); }}>Reject</button></div></div>}
+      <div className="lobby">{Array.from({ length: roomCapacity }, (_, index) => index + 1).map((slot) => <div key={slot}><span>Player {slot}{slot === 1 ? ' · Host' : ''}</span><strong>{playerStates[slot]}</strong></div>)}</div>
+      <StatusPanel diagnostics={diagnostics} status={status} /><EngineStatusPanel status={engineStatus} /><label className="quality-control">Stream quality<select value={streamQuality} onChange={(e) => setStreamQuality(e.target.value as StreamQuality)}><option value="auto">Auto</option><option value="smooth">Smooth · lower latency</option><option value="balanced">Balanced</option><option value="sharp">Sharp · higher quality</option></select></label><label className="file-button">{romLoaded ? `Change ROM (${romName})` : 'Load your legal ROM'}<input type="file" accept=".gba,.gb,.gbc" onChange={(e) => e.target.files?.[0] && loadRom(e.target.files[0])} /></label><button onClick={startGame} disabled={gameStarted}>{gameStarted ? 'Game running' : 'Start game'}</button>
+    </div>
+    <TouchControls onKeys={(keys) => engineRef.current?.setKeys(0, keys)} /><button className="secondary" onClick={leave}>End session</button>
   </GameShell>;
 
   if (screen === 'guest') return <GameShell role="guest" title={`Guest Player ${assignedSlot || '…'}`} subtitle={`${roomCapacity}-player room · ${formatCode(roomCode)}`} canvasRef={guestCanvas} overlay={!guestHasVideo ? <div className="screen-overlay">Waiting for host video<small>Ask the host to approve you and start the game.</small></div> : undefined}><StatusPanel diagnostics={diagnostics} status={status} /><TouchControls onKeys={(keys) => sessionRef.current?.sendInput(keys)} /><button className="secondary" onClick={leave}>Disconnect</button></GameShell>;
@@ -390,7 +410,11 @@ function playPcm(rate: number, samples: Int16Array) {
   for (let i = 0; i < frames; i++) { left[i] = samples[i * 2] / 32768; right[i] = samples[i * 2 + 1] / 32768; }
   buffer.copyToChannel(left, 0); buffer.copyToChannel(right, 1);
   const source = context.createBufferSource(); source.buffer = buffer; source.connect(context.destination);
-  const start = Math.max(context.currentTime + 0.02, audioNextTime);
+  const now = context.currentTime;
+  const minLead = 0.02;
+  const maxLead = 0.18;
+  if (!Number.isFinite(audioNextTime) || audioNextTime < now || audioNextTime - now > maxLead) audioNextTime = now + minLead;
+  const start = Math.max(now + minLead, audioNextTime);
   source.start(start); audioNextTime = start + buffer.duration;
 }
 
