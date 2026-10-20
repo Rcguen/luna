@@ -22,7 +22,7 @@ ROM, creates a room, and approves the guest. The guest does not need the ROM.
 ## Deployment
 
 The Pages workflow builds the Vite app and publishes `dist/` at
-`https://rcguen.github.io/kirby-online/`. PeerJS provides signaling; the
+`https://rcguen.github.io/luna-project/`. PeerJS provides signaling; the
 application currently configures public STUN servers and has no TURN service.
 Restrictive NAT pairs may therefore require a future TURN configuration.
 
