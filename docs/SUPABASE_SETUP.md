@@ -8,8 +8,11 @@ contain a Supabase project URL, key, ROM, save file, or service-role secret.
 ## Create the backend
 
 1. Create a Supabase project.
-2. In the Supabase SQL Editor, run
-   `supabase/migrations/20261020100000_luna_cloud_saves.sql`.
+2. Open the Supabase SQL Editor, delete any old draft SQL, paste the complete
+   contents of `supabase/migrations/20261020100000_luna_cloud_saves.sql`, and
+   run it once. The script is repeatable for the expected Luna schema and
+   preserves existing tables, bucket objects, and rows. It stops instead of
+   rewriting data if existing rows violate the new ownership or path checks.
 3. Copy `.env.example` to `.env.local` and fill in the project URL and the
    publishable (or legacy `anon`) key:
 
@@ -32,10 +35,8 @@ In Supabase Authentication → URL Configuration, add these redirect URLs:
 For a local build, restart Vite after changing `.env.local`.
 
 For GitHub Pages, add `VITE_SUPABASE_URL` and
-`VITE_SUPABASE_PUBLISHABLE_KEY` as repository Actions variables or secrets,
-then update `.github/workflows/pages.yml` to pass them to the `npm run build`
-step. The current workflow intentionally builds without credentials, so the
-published app shows a setup message until those values are supplied.
+`VITE_SUPABASE_PUBLISHABLE_KEY` as repository Actions secrets. The existing
+`.github/workflows/pages.yml` passes them only to the build step.
 
 ## Data and security model
 
@@ -43,11 +44,16 @@ published app shows a setup message until those values are supplied.
   never uploaded by the app.
 - `save_files` stores save metadata and revisions.
 - Save bytes are kept in the private `luna-saves` bucket under
-  `<user-id>/<game-id>/<player-slot>/<save-type>/...`.
+  `<user-id>/<game-id>/<player-slot>/<save-type>/<revision>-<sha256>.bin`.
 - RLS policies restrict rows to `auth.uid()`, and Storage policies restrict
-  objects to the authenticated user's first path segment.
+  objects to the authenticated user's UUID prefix and the expected path shape.
 - The browser keeps failed uploads in IndexedDB and retries them when the
   browser reports an online transition.
+
+The migration grants table access only to `authenticated`, revokes table
+access from `anon`/`PUBLIC`, and recreates only the named Luna policies. Review
+any custom policies on these tables before running the script, because
+PostgreSQL policies are otherwise additive.
 
 ## Current emulator limitation
 
