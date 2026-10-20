@@ -9,6 +9,8 @@
   and MIME expectations checked.
 - Live browser smoke check of the deployed home page — page rendered and showed
   the expected cloud setup state before Supabase credentials were available.
+- Auth redirect source audit — signup, resend, and recovery use the shared
+  `/luna/`-aware helper; callback cleanup preserves the current path.
 
 ## Not available or not run
 
@@ -19,6 +21,8 @@
 - No cross-network WebRTC, TURN, Android physical-device, legal Kirby ROM, or
   battery-SRAM test was executed.
 - No formal lint/test runner was configured in the project before this stage.
+- No real confirmation email, PKCE exchange, password recovery, or Supabase
+  dashboard configuration test was executed.
 
 ## Manual acceptance checklist
 
