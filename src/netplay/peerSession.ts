@@ -11,10 +11,6 @@ export type Diagnostics = {
   channel: string;
   rtt: number | null;
   fps: number | null;
-  droppedFrames: number;
-  bufferedBytes: number | null;
-  bytesSent: number | null;
-  bytesReceived: number | null;
   error: string;
 };
 
@@ -189,10 +185,6 @@ export class PeerSession {
           reports.forEach((report) => {
             if (report.type === 'local-candidate' || report.type === 'remote-candidate') candidates.set(report.id, report);
             if (report.type === 'candidate-pair' && (report.nominated || report.selected || report.state === 'succeeded')) selected = report;
-            if (report.type === 'data-channel') {
-              if (typeof report.bytesSent === 'number') result.bytesSent = report.bytesSent;
-              if (typeof report.bytesReceived === 'number') result.bytesReceived = report.bytesReceived;
-            }
           });
           if (selected) {
             result.candidate = candidates.get(selected.localCandidateId || '')?.candidateType || 'unavailable';
@@ -217,10 +209,6 @@ export class PeerSession {
       channel: (this.connection as DataConnection & { dataChannel?: RTCDataChannel } | null)?.dataChannel?.readyState || 'unavailable',
       rtt: null,
       fps: null,
-      droppedFrames: 0,
-      bufferedBytes: (this.connection as DataConnection & { dataChannel?: RTCDataChannel } | null)?.dataChannel?.bufferedAmount ?? null,
-      bytesSent: null,
-      bytesReceived: null,
       error: this.lastError,
     };
   }
