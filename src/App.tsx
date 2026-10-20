@@ -38,12 +38,14 @@ async function toggleFullscreen() {
 }
 
 function streamConfig(quality: StreamQuality, rtt: number | null) {
-  if (quality === 'smooth') return { interval: 50, jpeg: 0.58 };
-  if (quality === 'sharp') return { interval: 33, jpeg: 0.9 };
-  if (quality === 'balanced') return { interval: 33, jpeg: 0.78 };
-  if (rtt !== null && rtt > 150) return { interval: 67, jpeg: 0.55 };
-  if (rtt !== null && rtt > 80) return { interval: 50, jpeg: 0.65 };
-  return { interval: 33, jpeg: 0.78 };
+  // Keep the host's encode work and the reliable DataChannel queue bounded.
+  // Fewer, cleaner frames are more usable than a 30 FPS stream that stalls.
+  if (quality === 'smooth') return { interval: 50, jpeg: 0.65 };
+  if (quality === 'sharp') return { interval: 40, jpeg: 0.92 };
+  if (quality === 'balanced') return { interval: 40, jpeg: 0.88 };
+  if (rtt !== null && rtt > 150) return { interval: 67, jpeg: 0.68 };
+  if (rtt !== null && rtt > 80) return { interval: 50, jpeg: 0.78 };
+  return { interval: 50, jpeg: 0.88 };
 }
 
 export default function App() {
