@@ -38,14 +38,14 @@ async function toggleFullscreen() {
 }
 
 function streamConfig(quality: StreamQuality, rtt: number | null, bufferedBytes: number | null) {
-  if (bufferedBytes !== null && bufferedBytes > 256 * 1024) return { interval: 67, jpeg: 0.58 };
-  if (bufferedBytes !== null && bufferedBytes > 96 * 1024) return { interval: 50, jpeg: 0.68 };
-  if (quality === 'smooth') return { interval: 50, jpeg: 0.58 };
-  if (quality === 'sharp') return { interval: 33, jpeg: 0.9 };
-  if (quality === 'balanced') return { interval: 33, jpeg: 0.78 };
+  if (bufferedBytes !== null && bufferedBytes > 512 * 1024) return { interval: 67, jpeg: 0.62 };
+  if (bufferedBytes !== null && bufferedBytes > 128 * 1024) return { interval: 50, jpeg: 0.72 };
+  if (quality === 'smooth') return { interval: 50, jpeg: 0.65 };
+  if (quality === 'sharp') return { interval: 33, jpeg: 0.94 };
+  if (quality === 'balanced') return { interval: 33, jpeg: 0.86 };
   if (rtt !== null && rtt > 150) return { interval: 67, jpeg: 0.58 };
   if (rtt !== null && rtt > 80) return { interval: 50, jpeg: 0.68 };
-  return { interval: 33, jpeg: 0.78 };
+  return { interval: 33, jpeg: 0.86 };
 }
 
 export default function App() {

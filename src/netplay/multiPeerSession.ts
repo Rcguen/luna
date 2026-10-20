@@ -39,9 +39,8 @@ type ConnectionState = {
 
 const iceServers: RTCConfiguration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun.cloudflare.com:3478' }] };
 const MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
-const FRAME_BUFFERED_HIGH_WATER = 256 * 1024;
-const FRAME_BUFFERED_LOW_WATER = 64 * 1024;
-const AUDIO_BUFFERED_HIGH_WATER = 96 * 1024;
+const MEDIA_BUFFERED_HIGH_WATER = 512 * 1024;
+const MEDIA_BUFFERED_LOW_WATER = 128 * 1024;
 
 function clientId(): string {
   const key = 'luna-client-id';
@@ -128,17 +127,7 @@ export class MultiPeerSession {
       }
     }
   }
-  sendAudio(slot: PlayerSlot, audio: AudioMessage): void {
-    for (const state of this.connections.values()) {
-      if (!state.approved || state.slot !== slot) continue;
-      // Audio shares an ordered DataChannel with video. Drop audio while a
-      // frame is waiting, or while the channel is moderately queued, so
-      // audio cannot create head-of-line blocking for the newest frame.
-      const channel = this.dataChannel(state);
-      if (state.pendingFrame || (channel && channel.bufferedAmount > AUDIO_BUFFERED_HIGH_WATER)) continue;
-      this.send(state, audio, true, AUDIO_BUFFERED_HIGH_WATER);
-    }
-  }
+  sendAudio(slot: PlayerSlot, audio: AudioMessage): void { for (const state of this.connections.values()) if (state.approved && state.slot === slot) this.send(state, audio, true); }
   roomCode(): string { return this.room; }
   capacity(): number { return this.roomCapacity; }
   assignedSlot(): PlayerSlot | null { return this.assigned; }
@@ -253,7 +242,7 @@ export class MultiPeerSession {
   private configureChannel(state: ConnectionState): void {
     const channel = this.dataChannel(state);
     if (!channel) return;
-    channel.bufferedAmountLowThreshold = FRAME_BUFFERED_LOW_WATER;
+    channel.bufferedAmountLowThreshold = MEDIA_BUFFERED_LOW_WATER;
     channel.addEventListener('bufferedamountlow', () => this.flushFrame(state));
   }
 
@@ -264,7 +253,7 @@ export class MultiPeerSession {
   private flushFrame(state: ConnectionState): void {
     if (state.frameFlushTimer || !state.pendingFrame || !state.approved || !state.connection.open) return;
     const channel = this.dataChannel(state);
-    if (channel && channel.bufferedAmount > FRAME_BUFFERED_HIGH_WATER) {
+    if (channel && channel.bufferedAmount > MEDIA_BUFFERED_HIGH_WATER) {
       state.frameFlushTimer = window.setTimeout(() => {
         state.frameFlushTimer = undefined;
         this.flushFrame(state);
@@ -272,19 +261,19 @@ export class MultiPeerSession {
       return;
     }
     const frame = state.pendingFrame;
-    if (this.send(state, frame, true, FRAME_BUFFERED_HIGH_WATER)) state.pendingFrame = undefined;
+    state.pendingFrame = undefined;
+    this.send(state, frame, true);
   }
 
-  private send(state: ConnectionState | DataConnection, message: WireMessage, media = false, highWater = MAX_BUFFERED_BYTES): boolean {
+  private send(state: ConnectionState | DataConnection, message: WireMessage, media = false): void {
     const connection = 'connection' in state ? state.connection : state;
-    if (!connection.open) return false;
+    if (!connection.open) return;
     const channel = (connection as DataConnection & { dataChannel?: RTCDataChannel }).dataChannel;
-    if (channel && channel.bufferedAmount > highWater) {
-      this.lastError = media ? 'Media queue is congested; waiting for the newest frame.' : 'Connection buffer is full; control packet skipped.';
-      return false;
+    if (channel && channel.bufferedAmount > (media ? MEDIA_BUFFERED_HIGH_WATER : MAX_BUFFERED_BYTES)) {
+      this.lastError = media ? 'Media queue is congested; newest frame/audio will be retried or skipped.' : 'Connection buffer is full; control packet skipped.';
+      return;
     }
     connection.send(message);
-    return true;
   }
 
   private closeConnection(state: ConnectionState, notify = true): void {
