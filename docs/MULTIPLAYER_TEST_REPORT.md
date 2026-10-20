@@ -15,6 +15,8 @@
 - Capacity rejection and duplicate session-ID rejection.
 - Slot assignment, reconnect slot memory, per-slot input routing, and
   per-guest frame routing.
+- Host audio mix broadcast to approved guests; per-instance audio isolation is
+  not exposed by the current WASM bridge.
 
 ## Not tested in this environment
 

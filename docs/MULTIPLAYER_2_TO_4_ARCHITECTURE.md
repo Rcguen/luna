@@ -39,7 +39,9 @@ the current browser bridge does not provide.
 - A `sessionStorage` client ID lets a reconnect reclaim its previous slot while
   the host room remains alive.
 - Input routes to `engine.setKeys(slot - 1, keys)`.
-- Each guest receives only `engine.frame(slot - 1)` and matching audio.
+- Each guest receives only `engine.frame(slot - 1)`; the current bridge exposes a
+  host audio mix, so audio is broadcast to approved guests rather than isolated
+  per emulator instance.
 - The lobby shows pending/connected/disconnected seats and Start game requires
   all configured guest seats to be connected.
 
