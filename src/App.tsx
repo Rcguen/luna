@@ -59,6 +59,14 @@ export default function App() {
     return engine;
   };
 
+  const ensureAudio = async () => {
+    if (!audioContext.current) {
+      audioContext.current = new AudioContext();
+      (window as Window & { kirbyAudio?: AudioContext }).kirbyAudio = audioContext.current;
+    }
+    await audioContext.current.resume().catch(() => undefined);
+  };
+
   const makeEvents = (hostSide: boolean) => ({
     status: (text: string) => setStatus(text),
     diagnostics: (value: Diagnostics) => setDiagnostics(value),
@@ -77,9 +85,7 @@ export default function App() {
       if (romBytesRef.current) engine.loadRom(romBytesRef.current);
       const session = new MultiPeerSession(makeEvents(true));
       sessionRef.current = session;
-      audioContext.current = new AudioContext();
-      (window as Window & { kirbyAudio?: AudioContext }).kirbyAudio = audioContext.current;
-      await audioContext.current.resume().catch(() => undefined);
+      await ensureAudio();
       const code = await session.host(roomCapacity);
       setRoomCode(code);
       setGameStarted(Boolean(romBytesRef.current));
@@ -91,6 +97,7 @@ export default function App() {
     try {
       if (!romBytesRef.current) { setStatus('Select your legal ROM first.'); return; }
       setStatus('Starting solo emulator…');
+      await ensureAudio();
       const engine = await newEngine(1);
       engine.loadRom(romBytesRef.current);
       setRomLoaded(true); setGameStarted(true); setScreen('solo'); setStatus('Solo game running.');
@@ -104,8 +111,7 @@ export default function App() {
       setStatus('Connecting to host…');
       const session = new MultiPeerSession(makeEvents(false));
       sessionRef.current = session;
-      audioContext.current = new AudioContext();
-      (window as Window & { kirbyAudio?: AudioContext }).kirbyAudio = audioContext.current;
+      await ensureAudio();
       await session.join(clean);
       setRoomCode(clean);
       setScreen('guest');
@@ -132,15 +138,22 @@ export default function App() {
     if (!['solo', 'host'].includes(screen) || !romLoaded || !gameStarted) return;
     let raf = 0;
     let last = performance.now();
-    let frameAccumulator = 0;
+    let frameAccumulator = 16.67;
     let lastSent = 0;
     const tick = (now: number) => {
       const engine = engineRef.current;
       if (!engine) return;
-      frameAccumulator += Math.min(100, now - last); last = now;
-      while (frameAccumulator >= 16.67) { engine.runFrame(); frameAccumulator -= 16.67; }
-      const local = engine.frame(0);
-      if (local) drawFrame(hostCanvas.current, local);
+      try {
+        frameAccumulator += Math.min(100, now - last); last = now;
+        while (frameAccumulator >= 16.67) { engine.runFrame(); frameAccumulator -= 16.67; }
+        const local = engine.frame(0);
+        if (local) drawFrame(hostCanvas.current, local);
+      } catch (error) {
+        engine.fail(error);
+        setEngineStatus(engine.diagnostics());
+        setStatus(`Emulator stopped: ${error instanceof Error ? error.message : String(error)}`);
+        return;
+      }
       const shouldSend = screen === 'host' && now - lastSent >= 33 && approved && sessionRef.current;
       if (shouldSend) {
         for (let slot = 2; slot <= roomCapacity; slot += 1) {

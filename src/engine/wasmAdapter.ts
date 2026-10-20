@@ -95,7 +95,7 @@ export class GbaEngine {
     try {
       module.HEAPU8.set(bytes, ptr);
       const result = module._mgs_load_rom(ptr, bytes.byteLength);
-      if (result !== 0) throw new Error(`GBA ROM rejected (engine code ${result})`);
+      if (result !== 0) { this.state.rom = 'rejected'; throw new Error(`GBA ROM rejected (engine code ${result})`); }
       this.state.rom = 'accepted';
       this.state.emulator = 'running';
     } finally {
@@ -103,7 +103,16 @@ export class GbaEngine {
     }
   }
 
-  runFrame(): void { this.requireModule()._mgs_run_frame(); this.state.framesExecuted += 1; this.state.emulator = 'running'; }
+  runFrame(): void {
+    try {
+      this.requireModule()._mgs_run_frame();
+      this.state.framesExecuted += 1;
+      this.state.emulator = 'running';
+    } catch (error) {
+      this.fail(error);
+      throw error;
+    }
+  }
 
   frame(player: number): EngineFrame | null {
     const module = this.requireModule();
