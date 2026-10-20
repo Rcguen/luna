@@ -16,6 +16,9 @@ export type EngineDiagnostics = {
   framesExecuted: number;
   framesRendered: number;
   lastFrame: string;
+  audioFrames: number;
+  audioBatches: number;
+  audioRate: number;
   error: string;
 };
 
@@ -30,6 +33,7 @@ type WasmModule = {
   _mgs_get_video_width(player: number): number;
   _mgs_get_video_height(player: number): number;
   _mgs_set_keys(player: number, keys: number): void;
+  _mgs_set_audio_source?(source: number): void;
   _mgs_get_audio(): number;
   _mgs_audio_frames(): number;
   _mgs_get_audio_rate?(): number;
@@ -73,7 +77,7 @@ export class GbaEngine {
   private module: WasmModule | null = null;
   private players = 0;
   private stopped = false;
-  private state: EngineDiagnostics = { wasm: 'idle', emulator: 'idle', rom: 'waiting', framesExecuted: 0, framesRendered: 0, lastFrame: '0×0', error: '' };
+  private state: EngineDiagnostics = { wasm: 'idle', emulator: 'idle', rom: 'waiting', framesExecuted: 0, framesRendered: 0, lastFrame: '0×0', audioFrames: 0, audioBatches: 0, audioRate: 32768, error: '' };
 
   async start(players = 2): Promise<void> {
     if (this.module) this.stop();
@@ -84,8 +88,10 @@ export class GbaEngine {
     });
     this.players = Math.max(1, Math.min(4, players));
     this.module._mgs_init(this.players);
+    // The wrapper supports 0=mute, 1-4=one player, 5=mixed audio.
+    this.module._mgs_set_audio_source?.(1);
     this.stopped = false;
-    this.state = { wasm: 'loaded', emulator: 'created', rom: 'waiting', framesExecuted: 0, framesRendered: 0, lastFrame: '0×0', error: '' };
+    this.state = { wasm: 'loaded', emulator: 'created', rom: 'waiting', framesExecuted: 0, framesRendered: 0, lastFrame: '0×0', audioFrames: 0, audioBatches: 0, audioRate: 32768, error: '' };
   }
 
   loadRom(bytes: Uint8Array): void {
@@ -148,9 +154,12 @@ export class GbaEngine {
     const module = this.requireModule();
     const ptr = module._mgs_get_audio();
     const frames = module._mgs_audio_frames();
+    this.state.audioFrames = frames;
+    this.state.audioRate = module._mgs_get_audio_rate?.() ?? 32768;
     if (!ptr || frames <= 0) return null;
+    this.state.audioBatches += 1;
     const bytes = module.HEAPU8.slice(ptr, ptr + frames * 4);
-    return { rate: module._mgs_get_audio_rate?.() ?? 32768, samples: new Int16Array(bytes.buffer) };
+    return { rate: this.state.audioRate, samples: new Int16Array(bytes.buffer) };
   }
 
   stop(): void {
