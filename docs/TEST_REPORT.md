@@ -11,6 +11,11 @@
   the expected cloud setup state before Supabase credentials were available.
 - Auth redirect source audit — signup, resend, and recovery use the shared
   `/luna/`-aware helper; callback cleanup preserves the current path.
+- `/luna/` asset smoke test — HTML, Emscripten JavaScript, and WASM returned
+  HTTP 200 under the deployment base; Node successfully compiled the WASM
+  binary and reported 33 exports.
+- Browser smoke test — Solo control, room capacity selector, and Create room
+  controls rendered in the local `/luna/` page.
 
 ## Not available or not run
 
@@ -23,6 +28,9 @@
 - No formal lint/test runner was configured in the project before this stage.
 - No real confirmation email, PKCE exchange, password recovery, or Supabase
   dashboard configuration test was executed.
+- No legal ROM was available in the accessible workspace, so emulator ROM
+  acceptance, frame execution, non-placeholder framebuffer pixels, and input
+  state changes were not tested.
 
 ## Manual acceptance checklist
 

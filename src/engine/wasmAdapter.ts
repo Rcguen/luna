@@ -9,6 +9,16 @@ export type EngineAudio = {
   samples: Int16Array;
 };
 
+export type EngineDiagnostics = {
+  wasm: 'idle' | 'loaded' | 'failed';
+  emulator: 'idle' | 'created' | 'running' | 'stopped' | 'failed';
+  rom: 'waiting' | 'accepted' | 'rejected';
+  framesExecuted: number;
+  framesRendered: number;
+  lastFrame: string;
+  error: string;
+};
+
 type WasmModule = {
   HEAPU8: Uint8Array;
   _malloc(size: number): number;
@@ -63,6 +73,7 @@ export class GbaEngine {
   private module: WasmModule | null = null;
   private players = 0;
   private stopped = false;
+  private state: EngineDiagnostics = { wasm: 'idle', emulator: 'idle', rom: 'waiting', framesExecuted: 0, framesRendered: 0, lastFrame: '0×0', error: '' };
 
   async start(players = 2): Promise<void> {
     if (this.module) this.stop();
@@ -74,6 +85,7 @@ export class GbaEngine {
     this.players = Math.max(1, Math.min(4, players));
     this.module._mgs_init(this.players);
     this.stopped = false;
+    this.state = { wasm: 'loaded', emulator: 'created', rom: 'waiting', framesExecuted: 0, framesRendered: 0, lastFrame: '0×0', error: '' };
   }
 
   loadRom(bytes: Uint8Array): void {
@@ -84,12 +96,14 @@ export class GbaEngine {
       module.HEAPU8.set(bytes, ptr);
       const result = module._mgs_load_rom(ptr, bytes.byteLength);
       if (result !== 0) throw new Error(`GBA ROM rejected (engine code ${result})`);
+      this.state.rom = 'accepted';
+      this.state.emulator = 'running';
     } finally {
       module._free(ptr);
     }
   }
 
-  runFrame(): void { this.requireModule()._mgs_run_frame(); }
+  runFrame(): void { this.requireModule()._mgs_run_frame(); this.state.framesExecuted += 1; this.state.emulator = 'running'; }
 
   frame(player: number): EngineFrame | null {
     const module = this.requireModule();
@@ -98,6 +112,8 @@ export class GbaEngine {
     const ptr = module._mgs_get_video(player);
     if (!ptr || !width || !height) return null;
     const bytes = module.HEAPU8.slice(ptr, ptr + width * height * 4);
+    this.state.framesRendered += 1;
+    this.state.lastFrame = `${width}×${height}`;
     return { width, height, rgba: new Uint8ClampedArray(bytes.buffer) };
   }
 
@@ -131,9 +147,14 @@ export class GbaEngine {
   stop(): void {
     if (this.module && !this.stopped) this.module._mgs_quit();
     this.stopped = true;
+    this.state.emulator = 'stopped';
     this.module = null;
     this.players = 0;
   }
+
+  diagnostics(): EngineDiagnostics { return { ...this.state }; }
+
+  fail(error: unknown): void { this.state.emulator = 'failed'; this.state.wasm = this.state.wasm === 'idle' ? 'failed' : this.state.wasm; this.state.error = error instanceof Error ? error.message : String(error); }
 
   private requireModule(): WasmModule {
     if (!this.module) throw new Error('GBA engine is not started');

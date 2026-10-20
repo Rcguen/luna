@@ -42,8 +42,9 @@ the current browser bridge does not provide.
 - Each guest receives only `engine.frame(slot - 1)`; the current bridge exposes a
   host audio mix, so audio is broadcast to approved guests rather than isolated
   per emulator instance.
-- The lobby shows pending/connected/disconnected seats and Start game requires
-  all configured guest seats to be connected.
+- The lobby shows pending/connected/disconnected seats. The host may start the
+  local emulator before guests arrive; the lobby makes missing seats explicit
+  and approved guests begin receiving their stream once connected.
 
 ## Explicit limitations
 
