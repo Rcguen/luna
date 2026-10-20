@@ -2,6 +2,7 @@
 
 :root { color: #fff; background: #160d2c; font-family: Nunito, system-ui, sans-serif; font-synthesis: none; --ink: #fff; --muted: #bca9d0; --surface: #211239; --surface-deep: #160d2c; --line: #533b72; --accent: #ff5ca8; --accent-strong: #ffd94e; --focus: #79e7bc; }
 * { box-sizing: border-box; }
+html, #root { width: 100%; min-width: 0; max-width: 100%; overflow-x: hidden; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 body { margin: 0; min-width: 320px; min-height: 100vh; overflow-x: hidden; background: radial-gradient(circle at 30% 0%, #39205a, #160d2c 55%); }
 button, input { font: inherit; }
@@ -42,7 +43,7 @@ input { width: 100%; border: 1px solid #6b4f8b; border-radius: 12px; padding: 14
 .home-file { text-align: center; }
 .file-button { display: inline-block; padding: 13px 18px; border-radius: 14px; border: 1px dashed #b28acb; color: #f6dff0; cursor: pointer; text-align: center; }
 .file-button input { display: none; }
-.status, .muted, footer { color: #bca9d0; }
+.status, .muted, footer { min-width: 0; color: #bca9d0; overflow-wrap: anywhere; word-break: break-word; }
 footer { text-align: center; font-size: 13px; }
 .game-shell header { display: flex; justify-content: space-between; align-items: start; margin-bottom: 28px; }
 .game-shell h1 { font-size: clamp(32px, 5vw, 52px); }
@@ -82,7 +83,7 @@ dt { color: #a994c0; } dd { margin: 0; text-align: right; color: #79e7bc; }
 @media (max-width: 760px) {
   .home { width: calc(100% - 24px); max-width: none; min-width: 0; align-content: start; gap: 18px; padding: 24px 0; }
   .home > * { min-width: 0; }
-  .home-card, .library, .account-card { padding: 18px; border-radius: 20px; }
+  .home-card, .library, .account-card, .game-row { max-width: 100%; padding: 18px; border-radius: 20px; }
   .play-heading h2 { font-size: clamp(20px, 6vw, 28px); line-height: 1.12; white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
   .ready-pill { margin-top: 2px; }
   .library-heading { align-items: start; }
@@ -90,7 +91,7 @@ dt { color: #a994c0; } dd { margin: 0; text-align: right; color: #79e7bc; }
 }
 @media (max-width: 380px) {
   .home { width: calc(100% - 16px); }
-  .home-card, .library, .account-card { padding: 15px; }
+  .home-card, .library, .account-card, .game-row { padding: 15px; }
   .primary-actions { grid-template-columns: 1fr; }
 }
 @media (min-width: 900px) {
