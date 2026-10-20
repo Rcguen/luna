@@ -10,7 +10,7 @@ export function TouchControls({ onKeys }: Props) {
     onKeys([...held.current].reduce((sum, key) => sum | key, 0));
   };
   const button = (label: string, value: number, className = '') => (
-    <button type="button" aria-label={label === '●' ? 'D-pad center' : label} className={`touch-button ${className}`} onContextMenu={(e) => e.preventDefault()} onPointerDown={(e) => { e.preventDefault(); e.currentTarget.setPointerCapture(e.pointerId); update(value, true); }} onPointerUp={(e) => { e.preventDefault(); update(value, false); }} onPointerCancel={() => update(value, false)}>{label}</button>
+    <button type="button" aria-label={label === '●' ? 'D-pad center' : label} className={`touch-button ${className}`} onContextMenu={(e) => e.preventDefault()} onPointerDown={(e) => { e.preventDefault(); e.currentTarget.setPointerCapture(e.pointerId); update(value, true); }} onPointerUp={(e) => { e.preventDefault(); update(value, false); }} onPointerCancel={() => update(value, false)} onLostPointerCapture={() => update(value, false)}>{label}</button>
   );
   return <div className="touch-controls" aria-label="GBA touch controls">
     <div className="dpad">{button('▲', bit.up)}{button('◀', bit.left)}{button('●', 0, 'dpad-center')}{button('▶', bit.right)}{button('▼', bit.down)}</div>
