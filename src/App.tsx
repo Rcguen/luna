@@ -103,7 +103,8 @@ export default function App() {
       while (frameAccumulator >= 16.67) { engine.runFrame(); frameAccumulator -= 16.67; }
       const local = engine.frame(0);
       if (local) drawFrame(hostCanvas.current, local);
-      if (now - lastSent >= 33 && approved && sessionRef.current) {
+      const shouldSend = now - lastSent >= 33 && approved && sessionRef.current;
+      if (shouldSend) {
         const canvas = document.createElement('canvas');
         const remote = engine.frame(1);
         if (remote) {
@@ -114,13 +115,13 @@ export default function App() {
             sessionRef.current?.sendFrame({ type: 'frame', width: remote.width, height: remote.height, data: await blob.arrayBuffer() });
           }, 'image/jpeg', 0.78);
         }
-        const audio = engine.drainAudio();
-        if (audio) {
-          playPcm(audio.rate, audio.samples);
-          sessionRef.current.sendAudio({ type: 'audio', rate: audio.rate, data: audio.samples.buffer as ArrayBuffer });
-        }
         lastSent = now;
-      } else { engine.drainAudio(); }
+      }
+      const audio = engine.drainAudio();
+      if (audio) {
+        playPcm(audio.rate, audio.samples);
+        if (shouldSend) sessionRef.current?.sendAudio({ type: 'audio', rate: audio.rate, data: audio.samples.buffer as ArrayBuffer });
+      }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
