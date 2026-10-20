@@ -1,7 +1,7 @@
 export type InputMessage = { type: 'input'; keys: number };
 export type HelloMessage = { type: 'hello'; protocol: 1; clientId: string };
 export type ApprovalMessage = { type: 'approval'; accepted: boolean; reason?: string; slot?: number; capacity?: number };
-export type FrameMessage = { type: 'frame'; width: number; height: number; data: ArrayBuffer };
+export type FrameMessage = { type: 'frame'; width: number; height: number; data: ArrayBuffer; sequence?: number };
 export type AudioMessage = { type: 'audio'; rate: number; data: ArrayBuffer };
 export type PingMessage = { type: 'ping'; sentAt: number };
 export type PongMessage = { type: 'pong'; sentAt: number };
@@ -27,7 +27,7 @@ export function isWireMessage(value: unknown): value is WireMessage {
     case 'input': return Number.isInteger(value.keys) && value.keys >= 0 && value.keys <= INPUT_MASK;
     case 'hello': return value.protocol === 1 && typeof value.clientId === 'string' && value.clientId.length > 0 && value.clientId.length <= MAX_CLIENT_ID;
     case 'approval': return typeof value.accepted === 'boolean' && (value.reason === undefined || (typeof value.reason === 'string' && value.reason.length <= MAX_APPROVAL_REASON)) && (value.slot === undefined || (Number.isInteger(value.slot) && value.slot >= 2 && value.slot <= 4)) && (value.capacity === undefined || (Number.isInteger(value.capacity) && value.capacity >= 2 && value.capacity <= 4));
-    case 'frame': return Number.isInteger(value.width) && value.width >= 1 && value.width <= 1024 && Number.isInteger(value.height) && value.height >= 1 && value.height <= 1024 && isBinary(value.data, MAX_FRAME_BYTES);
+    case 'frame': return Number.isInteger(value.width) && value.width >= 1 && value.width <= 1024 && Number.isInteger(value.height) && value.height >= 1 && value.height <= 1024 && (value.sequence === undefined || (Number.isInteger(value.sequence) && value.sequence >= 0)) && isBinary(value.data, MAX_FRAME_BYTES);
     case 'audio': return Number.isFinite(value.rate) && value.rate >= 8000 && value.rate <= 96000 && isBinary(value.data, MAX_AUDIO_BYTES);
     case 'ping':
     case 'pong': return typeof value.sentAt === 'number' && Number.isFinite(value.sentAt) && value.sentAt >= 0;

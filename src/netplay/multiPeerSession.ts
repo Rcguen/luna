@@ -31,10 +31,16 @@ type ConnectionState = {
   receivedFrames: number;
   lastFpsAt: number;
   lastError: string;
+  lastFrameSequence: number;
+  droppedFrames: number;
+  pendingFrame?: FrameMessage;
+  frameFlushTimer?: number;
 };
 
 const iceServers: RTCConfiguration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun.cloudflare.com:3478' }] };
 const MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
+const MEDIA_BUFFERED_HIGH_WATER = 512 * 1024;
+const MEDIA_BUFFERED_LOW_WATER = 128 * 1024;
 
 function clientId(): string {
   const key = 'luna-client-id';
@@ -111,8 +117,17 @@ export class MultiPeerSession {
     }
   }
 
-  sendFrame(slot: PlayerSlot, frame: FrameMessage): void { for (const state of this.connections.values()) if (state.approved && state.slot === slot) this.send(state, frame); }
-  sendAudio(slot: PlayerSlot, audio: AudioMessage): void { for (const state of this.connections.values()) if (state.approved && state.slot === slot) this.send(state, audio); }
+  sendFrame(slot: PlayerSlot, frame: FrameMessage): void {
+    for (const state of this.connections.values()) {
+      if (state.approved && state.slot === slot) {
+        // Frames are disposable. Keep only the newest frame so a reliable
+        // DataChannel cannot turn temporary congestion into visible latency.
+        state.pendingFrame = frame;
+        this.flushFrame(state);
+      }
+    }
+  }
+  sendAudio(slot: PlayerSlot, audio: AudioMessage): void { for (const state of this.connections.values()) if (state.approved && state.slot === slot) this.send(state, audio, true); }
   roomCode(): string { return this.room; }
   capacity(): number { return this.roomCapacity; }
   assignedSlot(): PlayerSlot | null { return this.assigned; }
@@ -165,9 +180,10 @@ export class MultiPeerSession {
   }
 
   private attach(connection: DataConnection, hostSide: boolean): void {
-    const state: ConnectionState = { connection, clientId: '', slot: null, approved: !hostSide, receivedFrames: 0, lastFpsAt: performance.now(), lastError: '' };
+    const state: ConnectionState = { connection, clientId: '', slot: null, approved: !hostSide, receivedFrames: 0, lastFpsAt: performance.now(), lastError: '', lastFrameSequence: -1, droppedFrames: 0 };
     this.connections.set(connection.peer, state);
     connection.on('open', () => {
+      this.configureChannel(state);
       const hello = () => this.send(state, { type: 'hello', protocol: 1, clientId: this.id });
       hello();
       // A data channel can report open before the first application packet
@@ -196,7 +212,14 @@ export class MultiPeerSession {
       return;
     }
     if (value.type === 'input' && hostSide && state.approved && state.slot) this.events.input(state.slot, value.keys);
-    if (value.type === 'frame' && !hostSide && state.approved && this.assigned) { state.receivedFrames += 1; this.events.frame(this.assigned, value); }
+    if (value.type === 'frame' && !hostSide && state.approved && this.assigned) {
+      state.receivedFrames += 1;
+      if (value.sequence !== undefined) {
+        if (state.lastFrameSequence >= 0 && value.sequence > state.lastFrameSequence + 1) state.droppedFrames += value.sequence - state.lastFrameSequence - 1;
+        state.lastFrameSequence = value.sequence;
+      }
+      this.events.frame(this.assigned, value);
+    }
     if (value.type === 'audio' && !hostSide && state.approved && this.assigned) this.events.audio(this.assigned, value);
     if (value.type === 'approval' && !hostSide) {
       if (state.helloTimer) { window.clearInterval(state.helloTimer); state.helloTimer = undefined; }
@@ -216,17 +239,49 @@ export class MultiPeerSession {
 
   private slotInUse(slot: PlayerSlot): boolean { return [...this.connections.values()].some((state) => state.slot === slot); }
 
-  private send(state: ConnectionState | DataConnection, message: WireMessage): void {
+  private configureChannel(state: ConnectionState): void {
+    const channel = this.dataChannel(state);
+    if (!channel) return;
+    channel.bufferedAmountLowThreshold = MEDIA_BUFFERED_LOW_WATER;
+    channel.addEventListener('bufferedamountlow', () => this.flushFrame(state));
+  }
+
+  private dataChannel(state: ConnectionState): RTCDataChannel | undefined {
+    return (state.connection as DataConnection & { dataChannel?: RTCDataChannel }).dataChannel;
+  }
+
+  private flushFrame(state: ConnectionState): void {
+    if (state.frameFlushTimer || !state.pendingFrame || !state.approved || !state.connection.open) return;
+    const channel = this.dataChannel(state);
+    if (channel && channel.bufferedAmount > MEDIA_BUFFERED_HIGH_WATER) {
+      state.frameFlushTimer = window.setTimeout(() => {
+        state.frameFlushTimer = undefined;
+        this.flushFrame(state);
+      }, 16);
+      return;
+    }
+    const frame = state.pendingFrame;
+    state.pendingFrame = undefined;
+    this.send(state, frame, true);
+  }
+
+  private send(state: ConnectionState | DataConnection, message: WireMessage, media = false): void {
     const connection = 'connection' in state ? state.connection : state;
     if (!connection.open) return;
     const channel = (connection as DataConnection & { dataChannel?: RTCDataChannel }).dataChannel;
-    if (channel && channel.bufferedAmount > MAX_BUFFERED_BYTES) { this.lastError = 'Connection buffer is full; media packet skipped.'; return; }
+    if (channel && channel.bufferedAmount > (media ? MEDIA_BUFFERED_HIGH_WATER : MAX_BUFFERED_BYTES)) {
+      this.lastError = media ? 'Media queue is congested; newest frame/audio will be retried or skipped.' : 'Connection buffer is full; control packet skipped.';
+      return;
+    }
     connection.send(message);
   }
 
   private closeConnection(state: ConnectionState, notify = true): void {
     if (!this.connections.delete(state.connection.peer)) return;
     if (state.helloTimer) window.clearInterval(state.helloTimer);
+    if (state.frameFlushTimer) window.clearTimeout(state.frameFlushTimer);
+    state.frameFlushTimer = undefined;
+    state.pendingFrame = undefined;
     const timer = this.timers.get(state.connection.peer);
     if (timer) window.clearInterval(timer);
     this.timers.delete(state.connection.peer);
@@ -239,14 +294,21 @@ export class MultiPeerSession {
   private async refreshDiagnostics(state: ConnectionState): Promise<void> {
     const result = this.currentDiagnostics(state);
     const now = performance.now();
-    if (now - state.lastFpsAt >= 1000) { result.fps = state.receivedFrames * 1000 / (now - state.lastFpsAt); state.receivedFrames = 0; state.lastFpsAt = now; }
+    if (now - state.lastFpsAt >= 1000) { result.fps = state.receivedFrames * 1000 / (now - state.lastFpsAt); result.droppedFrames = state.droppedFrames; state.receivedFrames = 0; state.droppedFrames = 0; state.lastFpsAt = now; }
     const pc = (state.connection as DataConnection & { peerConnection?: RTCPeerConnection }).peerConnection;
     if (pc) {
       try {
         const reports = await pc.getStats();
         const candidates = new Map<string, { candidateType?: string }>();
         let selected: { localCandidateId?: string; currentRoundTripTime?: number; nominated?: boolean; selected?: boolean; state?: string } | null = null;
-        reports.forEach((report) => { if (report.type === 'local-candidate') candidates.set(report.id, report); if (report.type === 'candidate-pair' && (report.nominated || report.selected || report.state === 'succeeded')) selected = report; });
+        reports.forEach((report) => {
+          if (report.type === 'local-candidate') candidates.set(report.id, report);
+          if (report.type === 'candidate-pair' && (report.nominated || report.selected || report.state === 'succeeded')) selected = report;
+          if (report.type === 'data-channel') {
+            if (typeof report.bytesSent === 'number') result.bytesSent = report.bytesSent;
+            if (typeof report.bytesReceived === 'number') result.bytesReceived = report.bytesReceived;
+          }
+        });
         if (selected) { result.candidate = candidates.get(selected.localCandidateId || '')?.candidateType || 'unavailable'; result.rtt = typeof selected.currentRoundTripTime === 'number' ? selected.currentRoundTripTime * 1000 : null; }
       } catch (error) { state.lastError = error instanceof Error ? error.message : String(error); }
     }
@@ -256,6 +318,7 @@ export class MultiPeerSession {
 
   private currentDiagnostics(state: ConnectionState): Diagnostics {
     const pc = (state.connection as DataConnection & { peerConnection?: RTCPeerConnection }).peerConnection;
-    return { signaling: this.peer?.open ? 'open' : 'connecting', connection: pc?.connectionState || (state.connection.open ? 'open' : 'new'), ice: pc?.iceConnectionState || 'unavailable', gathering: pc?.iceGatheringState || 'unavailable', candidate: 'unavailable', channel: (state.connection as DataConnection & { dataChannel?: RTCDataChannel }).dataChannel?.readyState || 'unavailable', rtt: null, fps: null, error: state.lastError || this.lastError };
+    const channel = this.dataChannel(state);
+    return { signaling: this.peer?.open ? 'open' : 'connecting', connection: pc?.connectionState || (state.connection.open ? 'open' : 'new'), ice: pc?.iceConnectionState || 'unavailable', gathering: pc?.iceGatheringState || 'unavailable', candidate: 'unavailable', channel: channel?.readyState || 'unavailable', rtt: null, fps: null, droppedFrames: 0, bufferedBytes: channel?.bufferedAmount ?? null, bytesSent: null, bytesReceived: null, error: state.lastError || this.lastError };
   }
 }
