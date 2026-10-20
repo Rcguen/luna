@@ -190,9 +190,15 @@ export default function App() {
 
   useEffect(() => {
     if (!['solo', 'host', 'guest'].includes(screen)) return;
-    const map: Record<string, number> = { ArrowUp: 0x40, ArrowDown: 0x80, ArrowLeft: 0x20, ArrowRight: 0x10, z: 1, x: 2, Enter: 8, Shift: 4, a: 0x200, s: 0x100 };
+    const map: Record<string, number> = {
+      ArrowUp: 0x40, ArrowDown: 0x80, ArrowLeft: 0x20, ArrowRight: 0x10,
+      z: 1, Z: 1, KeyZ: 1, x: 2, X: 2, KeyX: 2,
+      Enter: 8, NumpadEnter: 8, Space: 8,
+      Shift: 4, a: 0x200, A: 0x200, KeyA: 0x200, s: 0x100, S: 0x100, KeyS: 0x100,
+      w: 0x40, W: 0x40, KeyW: 0x40, d: 0x10, D: 0x10, KeyD: 0x10,
+    };
     const update = (event: KeyboardEvent, down: boolean) => {
-      const value = map[event.key]; if (!value) return;
+      const value = map[event.code] ?? map[event.key]; if (!value) return;
       event.preventDefault();
       guestKeys.current = down ? guestKeys.current | value : guestKeys.current & ~value;
       if (screen === 'guest') sessionRef.current?.sendInput(guestKeys.current);
