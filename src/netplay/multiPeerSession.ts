@@ -58,6 +58,7 @@ export class MultiPeerSession {
   private approved = false;
   private closed = false;
   private lastError = '';
+  private lastInput = -1;
   private readonly id = clientId();
 
   constructor(private readonly events: MultiSessionEvents) {}
@@ -103,7 +104,11 @@ export class MultiPeerSession {
 
   sendInput(keys: number): void {
     const state = this.connections.values().next().value as ConnectionState | undefined;
-    if (this.approved && state) this.send(state, { type: 'input', keys: keys >>> 0 });
+    const next = keys >>> 0;
+    if (this.approved && state && next !== this.lastInput) {
+      this.lastInput = next;
+      this.send(state, { type: 'input', keys: next });
+    }
   }
 
   sendFrame(slot: PlayerSlot, frame: FrameMessage): void { for (const state of this.connections.values()) if (state.approved && state.slot === slot) this.send(state, frame); }
@@ -132,6 +137,7 @@ export class MultiPeerSession {
     this.connections.clear();
     this.timers.clear();
     this.lastError = '';
+    this.lastInput = -1;
   }
 
   private openPeer(): Promise<void> {

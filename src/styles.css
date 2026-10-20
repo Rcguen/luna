@@ -49,8 +49,12 @@ footer { text-align: center; font-size: 13px; }
 .live-dot.host { background: #ffb84d; color: #3d1c20; }
 .play-layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 24px; align-items: start; }
 .screen-card { padding: 16px; background: #080512; border-radius: 22px; border: 1px solid #5a3d72; }
+.screen-stage { position: relative; overflow: hidden; border-radius: 12px; background: #080512; }
 canvas { display: block; width: 100%; aspect-ratio: 3 / 2; image-rendering: pixelated; background: #080512; }
-.screen-caption { color: #bca9d0; font-size: 11px; letter-spacing: .16em; padding-top: 12px; }
+.screen-caption { color: #bca9d0; font-size: 11px; letter-spacing: .16em; padding-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.fullscreen-button { padding: 7px 10px; border: 1px solid #6b4f8b; border-radius: 9px; background: #2c1d4b; box-shadow: none; color: #fff; font-size: 11px; letter-spacing: normal; }
+.screen-overlay { position: absolute; inset: 0; display: grid; place-content: center; gap: 7px; padding: 24px; text-align: center; background: rgba(8, 5, 18, .86); color: #fff; font-weight: 800; pointer-events: none; }
+.screen-overlay small { color: #bca9d0; font-size: 12px; font-weight: 600; }
 aside { display: grid; gap: 14px; }
 .room-code { font-size: 42px; font-weight: 900; letter-spacing: .16em; color: #ffd94e; }
 .approval, .status-panel { background: #211239; border: 1px solid #624680; border-radius: 16px; padding: 16px; }
@@ -63,6 +67,8 @@ aside { display: grid; gap: 14px; }
 dl { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin: 0; font-size: 13px; }
 dt { color: #a994c0; } dd { margin: 0; text-align: right; color: #79e7bc; }
 .error { color: #ff8eaa; font-size: 12px; }
+.quality-control { display: grid; gap: 6px; color: #bca9d0; font-size: 12px; font-weight: 800; }
+.quality-control select { width: 100%; }
 .touch-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; touch-action: none; user-select: none; }
 .dpad { grid-row: span 2; display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; align-items: center; }
 .dpad .touch-button:nth-child(1) { grid-column: 2; }.dpad .touch-button:nth-child(2) { grid-column: 1; grid-row: 2; }.dpad .touch-button:nth-child(3) { grid-column: 2; grid-row: 2; }.dpad .touch-button:nth-child(4) { grid-column: 3; grid-row: 2; }.dpad .touch-button:nth-child(5) { grid-column: 2; grid-row: 3; }
@@ -70,5 +76,6 @@ dt { color: #a994c0; } dd { margin: 0; text-align: right; color: #79e7bc; }
 .dpad-center { opacity: .45; pointer-events: none; }
 .shoulders, .face, .system { display: flex; gap: 6px; }.face { justify-content: end; }.face .touch-button { border-radius: 50%; min-width: 52px; }.system { grid-column: 1 / -1; }.system .touch-button { flex: 1; font-size: 11px; }
 @media (max-width: 760px) { .play-layout { grid-template-columns: 1fr; } .game-shell { padding-top: 22px; } .screen-card { padding: 9px; } .game-shell aside { order: 2; } .invite-row { align-items: stretch; flex-direction: column; } }
+@media (max-width: 760px) and (orientation: landscape) { .game-shell { width: min(100% - 20px, 980px); padding: 12px 0; } .game-shell header { margin-bottom: 10px; } .game-shell header h1 { font-size: 28px; } .play-layout { grid-template-columns: minmax(0, 1fr) 250px; gap: 12px; align-items: center; } .game-shell aside { order: initial; max-height: calc(100vh - 70px); overflow: auto; } .screen-card { padding: 7px; } .screen-caption { padding-top: 6px; } }
 @media (orientation: portrait) and (max-width: 760px) { .game-shell { padding-bottom: 20px; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; } }
