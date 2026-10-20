@@ -1,9 +1,11 @@
 @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap');
 
-:root { color: #fff; background: #160d2c; font-family: Nunito, system-ui, sans-serif; font-synthesis: none; }
+:root { color: #fff; background: #160d2c; font-family: Nunito, system-ui, sans-serif; font-synthesis: none; --ink: #fff; --muted: #bca9d0; --surface: #211239; --surface-deep: #160d2c; --line: #533b72; --accent: #ff5ca8; --accent-strong: #ffd94e; --focus: #79e7bc; }
 * { box-sizing: border-box; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 body { margin: 0; min-width: 320px; min-height: 100vh; background: radial-gradient(circle at 30% 0%, #39205a, #160d2c 55%); }
 button, input { font: inherit; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
 button { cursor: pointer; border: 0; border-radius: 14px; padding: 14px 18px; background: #ff5ca8; color: #fff; font-weight: 900; box-shadow: 0 7px 0 #a72f6f; transition: transform .15s, filter .15s; }
 button:hover { filter: brightness(1.1); transform: translateY(-2px); }
 button:active { transform: translateY(3px); box-shadow: 0 3px 0 #a72f6f; }
@@ -32,6 +34,8 @@ select { background: #2c1d4b; color: #fff; border: 1px solid #6b4f8b; border-rad
 .save-list li span { flex: 1; }.danger { color: #ff8eaa; }
 .home-card > button:first-child { font-size: 20px; display: flex; justify-content: space-between; }
 .join-row { display: flex; gap: 10px; }
+.invite-row { display: flex; gap: 8px; align-items: center; }
+.invite-row input { min-width: 0; letter-spacing: normal; text-align: left; color: #dac9ed; font-size: 12px; }
 input { width: 100%; border: 1px solid #6b4f8b; border-radius: 12px; padding: 14px; background: #160d2c; color: white; letter-spacing: .2em; text-align: center; }
 .home-file { text-align: center; }
 .file-button { display: inline-block; padding: 13px 18px; border-radius: 14px; border: 1px dashed #b28acb; color: #f6dff0; cursor: pointer; text-align: center; }
@@ -58,8 +62,9 @@ dt { color: #a994c0; } dd { margin: 0; text-align: right; color: #79e7bc; }
 .touch-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; touch-action: none; user-select: none; }
 .dpad { grid-row: span 2; display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; align-items: center; }
 .dpad .touch-button:nth-child(1) { grid-column: 2; }.dpad .touch-button:nth-child(2) { grid-column: 1; grid-row: 2; }.dpad .touch-button:nth-child(3) { grid-column: 2; grid-row: 2; }.dpad .touch-button:nth-child(4) { grid-column: 3; grid-row: 2; }.dpad .touch-button:nth-child(5) { grid-column: 2; grid-row: 3; }
-.touch-button { min-height: 45px; padding: 8px; box-shadow: none; background: #4d3370; border: 1px solid #8366a4; }
+.touch-button { min-height: 45px; padding: 8px; box-shadow: none; background: #4d3370; border: 1px solid #8366a4; touch-action: none; }
 .dpad-center { opacity: .45; pointer-events: none; }
 .shoulders, .face, .system { display: flex; gap: 6px; }.face { justify-content: end; }.face .touch-button { border-radius: 50%; min-width: 52px; }.system { grid-column: 1 / -1; }.system .touch-button { flex: 1; font-size: 11px; }
-@media (max-width: 760px) { .play-layout { grid-template-columns: 1fr; } .game-shell { padding-top: 22px; } .screen-card { padding: 9px; } .game-shell aside { order: 2; } }
+@media (max-width: 760px) { .play-layout { grid-template-columns: 1fr; } .game-shell { padding-top: 22px; } .screen-card { padding: 9px; } .game-shell aside { order: 2; } .invite-row { align-items: stretch; flex-direction: column; } }
 @media (orientation: portrait) and (max-width: 760px) { .game-shell { padding-bottom: 20px; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; } }

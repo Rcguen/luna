@@ -10,7 +10,7 @@ import type { AudioMessage, FrameMessage } from './netplay/protocol';
 import './styles.css';
 
 type Screen = 'home' | 'host' | 'guest';
-const EMPTY_DIAGNOSTICS: Diagnostics = { signaling: 'idle', connection: 'idle', ice: 'idle', gathering: 'idle', candidate: 'idle', rtt: null, error: '' };
+const EMPTY_DIAGNOSTICS: Diagnostics = { signaling: 'idle', connection: 'idle', ice: 'idle', gathering: 'idle', candidate: 'idle', channel: 'idle', rtt: null, fps: null, error: '' };
 
 function formatCode(code: string) { return code ? `${code.slice(0, 3)} ${code.slice(3)}` : '------'; }
 
@@ -36,6 +36,11 @@ export default function App() {
   const audioContext = useRef<AudioContext | null>(null);
   const audioNextTime = useRef(0);
   const guestKeys = useRef(0);
+
+  useEffect(() => {
+    const invitedRoom = new URLSearchParams(window.location.search).get('room')?.replace(/\D/g, '') || '';
+    if (invitedRoom.length === 6) setRoom(invitedRoom);
+  }, []);
 
   const newEngine = async () => {
     const engine = new GbaEngine();
@@ -81,6 +86,8 @@ export default function App() {
       setStatus('Connecting to host…');
       const session = new PeerSession(makeEvents(false));
       sessionRef.current = session;
+      audioContext.current = new AudioContext();
+      (window as Window & { kirbyAudio?: AudioContext }).kirbyAudio = audioContext.current;
       await session.join(clean);
       setRoomCode(clean);
       setScreen('guest');
@@ -172,16 +179,18 @@ export default function App() {
   useEffect(() => () => { sessionRef.current?.close(); engineRef.current?.stop(); }, []);
 
   const leave = () => { sessionRef.current?.close(); engineRef.current?.stop(); sessionRef.current = null; engineRef.current = null; romBytesRef.current = null; setRomLoaded(false); setScreen('home'); setStatus('Session ended.'); };
+  const inviteLink = roomCode ? `${window.location.origin}${window.location.pathname}?room=${roomCode}` : '';
+  const copyInvite = async () => { if (!inviteLink) return; await navigator.clipboard?.writeText(inviteLink); setStatus('Invite link copied.'); };
 
   if (screen === 'host') return <GameShell title="Host room" subtitle={`Room ${formatCode(roomCode)}`} canvasRef={hostCanvas} local>
-    <div className="room-code">{formatCode(roomCode)}</div><p className="muted">Share this code. The guest still needs your approval.</p>
+    <div className="room-code">{formatCode(roomCode)}</div><p className="muted">Share this code or the invite link. The guest still needs your approval.</p><div className="invite-row"><input aria-label="Invite link" readOnly value={inviteLink} /><button className="secondary" onClick={() => void copyInvite()}>Copy invite</button></div>
     {pendingGuest && <div className="approval"><strong>Guest wants to join Player 2</strong><div><button onClick={() => (window as Window & { kirbyApprove?: () => void }).kirbyApprove?.()}>Approve</button><button className="secondary" onClick={() => (window as Window & { kirbyReject?: () => void }).kirbyReject?.()}>Reject</button></div></div>}
     <StatusPanel diagnostics={diagnostics} status={status} /><label className="file-button">{romLoaded ? `Change ROM (${romName})` : 'Load your legal ROM'}<input type="file" accept=".gba,.gb,.gbc" onChange={(e) => e.target.files?.[0] && loadRom(e.target.files[0])} /></label><button className="secondary" onClick={leave}>End session</button>
   </GameShell>;
 
   if (screen === 'guest') return <GameShell title="Guest Player 2" subtitle={`Room ${formatCode(roomCode)}`} canvasRef={guestCanvas}><StatusPanel diagnostics={diagnostics} status={status} /><TouchControls onKeys={(keys) => sessionRef.current?.sendInput(keys)} /><button className="secondary" onClick={leave}>Disconnect</button></GameShell>;
 
-  return <main className="home"><div className="brand"><span className="star">✦</span><p className="eyebrow">ONLINE GBA ADVENTURES</p><h1>Kirby Online</h1><p className="lede">Two linked players. One shared adventure.</p></div><AuthPanel onSession={setSession} /><section className="home-card"><button onClick={startHost}>Create room <span>→</span></button><div className="join-row"><input inputMode="numeric" maxLength={6} placeholder="ROOM CODE" value={room} onChange={(e) => setRoom(e.target.value.replace(/\D/g, ''))} /><button className="secondary" onClick={joinRoom}>Join</button></div><label className="file-button home-file">Load ROM for host<input type="file" accept=".gba,.gb,.gbc" onChange={(e) => e.target.files?.[0] && loadRom(e.target.files[0])} /></label><p className="status">{status}</p></section><GameLibrary userId={session?.user.id || null} refreshKey={libraryRefresh} /><footer>Host runs both linked consoles. Guests receive Player 2 video and send Player 2 controls. Guests may join without an account.</footer></main>;
+  return <main className="home"><div className="brand"><span className="star" aria-hidden="true">✦</span><p className="eyebrow">ONLINE GBA ADVENTURES</p><h1>Luna</h1><p className="lede">Two linked players. One shared adventure.</p></div><AuthPanel onSession={setSession} /><section className="home-card" aria-labelledby="play-heading"><p id="play-heading" className="eyebrow">PLAY</p><button onClick={startHost}>Create room <span aria-hidden="true">→</span></button><div className="join-row"><input aria-label="Six-digit room code" inputMode="numeric" maxLength={6} placeholder="ROOM CODE" value={room} onChange={(e) => setRoom(e.target.value.replace(/\D/g, ''))} /><button className="secondary" onClick={joinRoom}>Join</button></div><label className="file-button home-file">Load ROM for host<input aria-label="Load a legal ROM" type="file" accept=".gba,.gb,.gbc" onChange={(e) => e.target.files?.[0] && loadRom(e.target.files[0])} /></label><p className="status" role="status">{status}</p></section><GameLibrary userId={session?.user.id || null} refreshKey={libraryRefresh} /><footer>ROMs stay on your device. Guests receive Player 2 video and send Player 2 controls. Guests may join without an account.</footer></main>;
 }
 
 function drawFrame(canvas: HTMLCanvasElement | null, frame: EngineFrame) { if (!canvas) return; canvas.width = frame.width; canvas.height = frame.height; const image = new ImageData(frame.width, frame.height); image.data.set(frame.rgba); canvas.getContext('2d')?.putImageData(image, 0, 0); }
@@ -205,6 +214,6 @@ function playPcm(rate: number, samples: Int16Array) {
   source.start(start); audioNextTime.current = start + buffer.duration;
 }
 
-function GameShell({ title, subtitle, canvasRef, children, local = false }: { title: string; subtitle: string; canvasRef: React.RefObject<HTMLCanvasElement>; children: React.ReactNode; local?: boolean }) { return <main className="game-shell"><header><div><p className="eyebrow">KIRBY ONLINE</p><h1>{title}</h1><p className="muted">{subtitle}</p></div><span className={`live-dot ${local ? 'host' : ''}`}>{local ? 'HOST' : 'GUEST'}</span></header><section className="play-layout"><div className="screen-card"><canvas ref={canvasRef} aria-label="Game screen" /><div className="screen-caption">{local ? 'PLAYER 1 · LOCAL' : 'PLAYER 2 · REMOTE'}</div></div><aside>{children}</aside></section></main>; }
+function GameShell({ title, subtitle, canvasRef, children, local = false }: { title: string; subtitle: string; canvasRef: React.RefObject<HTMLCanvasElement>; children: React.ReactNode; local?: boolean }) { return <main className="game-shell"><header><div><p className="eyebrow">LUNA ONLINE</p><h1>{title}</h1><p className="muted">{subtitle}</p></div><span className={`live-dot ${local ? 'host' : ''}`}>{local ? 'HOST' : 'GUEST'}</span></header><section className="play-layout"><div className="screen-card"><canvas ref={canvasRef} aria-label={local ? 'Player 1 game screen' : 'Player 2 remote game screen'} /><div className="screen-caption">{local ? 'PLAYER 1 · LOCAL' : 'PLAYER 2 · REMOTE'}</div></div><aside>{children}</aside></section></main>; }
 
-function StatusPanel({ diagnostics, status }: { diagnostics: Diagnostics; status: string }) { return <div className="status-panel"><strong>{status}</strong><dl><dt>Signaling</dt><dd>{diagnostics.signaling}</dd><dt>Connection</dt><dd>{diagnostics.connection}</dd><dt>ICE</dt><dd>{diagnostics.ice}</dd><dt>Candidate</dt><dd>{diagnostics.candidate}</dd><dt>RTT</dt><dd>{diagnostics.rtt ? `${Math.round(diagnostics.rtt)} ms` : '—'}</dd></dl>{diagnostics.error && <p className="error">{diagnostics.error}</p>}</div>; }
+function StatusPanel({ diagnostics, status }: { diagnostics: Diagnostics; status: string }) { return <div className="status-panel"><strong role="status">{status}</strong><dl><dt>Signaling</dt><dd>{diagnostics.signaling}</dd><dt>Connection</dt><dd>{diagnostics.connection}</dd><dt>ICE</dt><dd>{diagnostics.ice}</dd><dt>Channel</dt><dd>{diagnostics.channel}</dd><dt>Candidate</dt><dd>{diagnostics.candidate}</dd><dt>RTT</dt><dd>{diagnostics.rtt ? `${Math.round(diagnostics.rtt)} ms` : '—'}</dd><dt>Received FPS</dt><dd>{diagnostics.fps ? diagnostics.fps.toFixed(1) : '—'}</dd></dl>{diagnostics.error && <p className="error">{diagnostics.error}</p>}</div>; }

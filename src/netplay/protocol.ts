@@ -7,8 +7,31 @@ export type PingMessage = { type: 'ping'; sentAt: number };
 export type PongMessage = { type: 'pong'; sentAt: number };
 export type WireMessage = InputMessage | HelloMessage | ApprovalMessage | FrameMessage | AudioMessage | PingMessage | PongMessage;
 
+export const INPUT_MASK = 0x3ff;
+export const MAX_FRAME_BYTES = 512 * 1024;
+export const MAX_AUDIO_BYTES = 256 * 1024;
+export const MAX_APPROVAL_REASON = 200;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object';
+}
+
+function isBinary(value: unknown, maxBytes: number): value is ArrayBuffer {
+  return value instanceof ArrayBuffer && value.byteLength > 0 && value.byteLength <= maxBytes;
+}
+
 export function isWireMessage(value: unknown): value is WireMessage {
-  return !!value && typeof value === 'object' && typeof (value as { type?: unknown }).type === 'string';
+  if (!isRecord(value) || typeof value.type !== 'string') return false;
+  switch (value.type) {
+    case 'input': return Number.isInteger(value.keys) && value.keys >= 0 && value.keys <= INPUT_MASK;
+    case 'hello': return value.protocol === 1;
+    case 'approval': return typeof value.accepted === 'boolean' && (value.reason === undefined || (typeof value.reason === 'string' && value.reason.length <= MAX_APPROVAL_REASON));
+    case 'frame': return Number.isInteger(value.width) && value.width >= 1 && value.width <= 1024 && Number.isInteger(value.height) && value.height >= 1 && value.height <= 1024 && isBinary(value.data, MAX_FRAME_BYTES);
+    case 'audio': return Number.isFinite(value.rate) && value.rate >= 8000 && value.rate <= 96000 && isBinary(value.data, MAX_AUDIO_BYTES);
+    case 'ping':
+    case 'pong': return typeof value.sentAt === 'number' && Number.isFinite(value.sentAt) && value.sentAt >= 0;
+    default: return false;
+  }
 }
 
 export function newRoomCode(): string {

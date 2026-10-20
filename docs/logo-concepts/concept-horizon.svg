@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Luna Horizon concept</title>
+  <desc id="desc">A rising moon over a connected horizon line.</desc>
+  <path fill="#160d2c" d="M0 0h256v256H0z"/>
+  <path fill="#ffd94e" d="M128 42c-42 0-76 34-76 76s34 76 76 76c20 0 38-8 52-21-9 3-18 5-28 5-42 0-76-34-76-76 0-25 12-47 30-61-8-1-14-1-22 1 13-12 30-20 44-20z"/>
+  <path fill="none" stroke="#ff5ca8" stroke-width="12" stroke-linecap="round" d="M30 202h196"/>
+  <path fill="none" stroke="#79e7bc" stroke-width="8" stroke-linecap="round" stroke-dasharray="2 22" d="M42 202h172"/>
+</svg>

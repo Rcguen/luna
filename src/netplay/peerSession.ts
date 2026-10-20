@@ -8,7 +8,9 @@ export type Diagnostics = {
   ice: string;
   gathering: string;
   candidate: string;
+  channel: string;
   rtt: number | null;
+  fps: number | null;
   error: string;
 };
 
@@ -29,6 +31,8 @@ const iceServers: RTCConfiguration = {
   ],
 };
 
+const MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
+
 export class PeerSession {
   private peer: Peer | null = null;
   private connection: DataConnection | null = null;
@@ -36,10 +40,16 @@ export class PeerSession {
   private events: SessionEvents;
   private lastError = '';
   private room = '';
+  private approved = false;
+  private hostRequestShown = false;
+  private closed = false;
+  private receivedFrames = 0;
+  private lastFpsAt = performance.now();
 
   constructor(events: SessionEvents) { this.events = events; }
 
   async host(): Promise<string> {
+    this.resetLifecycle();
     this.room = newRoomCode();
     this.peer = new Peer(`kirby-${this.room}`, { config: iceServers });
     await this.openPeer();
@@ -49,6 +59,7 @@ export class PeerSession {
   }
 
   async join(room: string): Promise<void> {
+    this.resetLifecycle();
     const clean = room.replace(/\D/g, '');
     if (clean.length !== 6) throw new Error('Room codes are exactly six digits');
     this.room = clean;
@@ -59,20 +70,31 @@ export class PeerSession {
     this.events.status('Waiting for host approval…');
   }
 
-  approve(): void { this.send({ type: 'approval', accepted: true }); }
+  approve(): void { this.approved = true; this.send({ type: 'approval', accepted: true }); }
   reject(): void { this.send({ type: 'approval', accepted: false, reason: 'Host rejected the join request' }); this.close(); }
-  sendInput(keys: number): void { this.send({ type: 'input', keys: keys >>> 0 }); }
-  sendFrame(frame: FrameMessage): void { this.send(frame); }
-  sendAudio(audio: AudioMessage): void { this.send(audio); }
+  sendInput(keys: number): void { if (this.approved) this.send({ type: 'input', keys: keys >>> 0 }); }
+  sendFrame(frame: FrameMessage): void { if (this.approved) this.send(frame); }
+  sendAudio(audio: AudioMessage): void { if (this.approved) this.send(audio); }
   roomCode(): string { return this.room; }
 
   close(): void {
+    if (this.closed) return;
+    this.closed = true;
     window.clearInterval(this.diagnosticsTimer);
     this.connection?.close();
     this.peer?.destroy();
     this.connection = null;
     this.peer = null;
     this.events.closed();
+  }
+
+  private resetLifecycle(): void {
+    this.closed = false;
+    this.approved = false;
+    this.hostRequestShown = false;
+    this.lastError = '';
+    this.receivedFrames = 0;
+    this.lastFpsAt = performance.now();
   }
 
   private openPeer(): Promise<void> {
@@ -82,7 +104,7 @@ export class PeerSession {
       const timer = window.setTimeout(() => reject(new Error('Signaling service timed out')), 12000);
       peer.on('open', () => { window.clearTimeout(timer); resolve(); });
       peer.on('error', (error) => {
-        this.lastError = error.message || error.type;
+        this.lastError = error.message || error.type || 'PeerJS error';
         this.events.status(`Connection error: ${this.lastError}`);
         if (error.type !== 'peer-unavailable') reject(error);
       });
@@ -93,7 +115,6 @@ export class PeerSession {
   private acceptIncoming(connection: DataConnection): void {
     if (this.connection) { connection.close(); return; }
     this.attach(connection, true);
-    this.events.guestRequest(() => this.approve(), () => this.reject());
   }
 
   private attach(connection: DataConnection, hostSide: boolean): void {
@@ -103,18 +124,25 @@ export class PeerSession {
       this.events.status(hostSide ? 'Guest connected; approval required.' : 'Connected to host; awaiting approval.');
     });
     connection.on('data', (value) => this.handle(value, hostSide));
-    connection.on('close', () => { this.events.status('Peer disconnected'); this.events.closed(); });
-    connection.on('error', (error) => { this.lastError = error.message; this.events.status(`Peer error: ${error.message}`); });
+    connection.on('close', () => { if (!this.closed) { this.events.status('Peer disconnected'); this.close(); } });
+    connection.on('error', (error) => { this.lastError = error.message || 'Data connection error'; this.events.status(`Peer error: ${this.lastError}`); });
     this.startDiagnostics(connection);
   }
 
   private handle(value: unknown, hostSide: boolean): void {
     if (!isWireMessage(value)) return;
-    if (value.type === 'input' && hostSide) this.events.input(value.keys);
-    if (value.type === 'frame' && !hostSide) this.events.frame(value);
-    if (value.type === 'audio' && !hostSide) this.events.audio(value);
+    if (value.type === 'hello') {
+      if (hostSide && !this.hostRequestShown) {
+        this.hostRequestShown = true;
+        this.events.guestRequest(() => this.approve(), () => this.reject());
+      }
+      return;
+    }
+    if (value.type === 'input' && hostSide && this.approved) this.events.input(value.keys);
+    if (value.type === 'frame' && !hostSide && this.approved) { this.receivedFrames += 1; this.events.frame(value); }
+    if (value.type === 'audio' && !hostSide && this.approved) this.events.audio(value);
     if (value.type === 'approval' && !hostSide) {
-      if (value.accepted) this.events.status('Host approved the session.');
+      if (value.accepted) { this.approved = true; this.events.status('Host approved the session.'); }
       else { this.events.status(value.reason || 'Host rejected the session.'); this.close(); }
     }
     if (value.type === 'ping') this.send({ type: 'pong', sentAt: value.sentAt });
@@ -122,7 +150,13 @@ export class PeerSession {
   }
 
   private send(message: WireMessage): void {
-    if (this.connection?.open) this.connection.send(message);
+    if (!this.connection?.open) return;
+    const dataChannel = (this.connection as DataConnection & { dataChannel?: RTCDataChannel }).dataChannel;
+    if (dataChannel && dataChannel.bufferedAmount > MAX_BUFFERED_BYTES) {
+      this.lastError = 'Connection buffer is full; media packet skipped.';
+      return;
+    }
+    this.connection.send(message);
   }
 
   private startDiagnostics(connection: DataConnection): void {
@@ -135,6 +169,12 @@ export class PeerSession {
   private async refreshDiagnostics(connection: DataConnection): Promise<void> {
       const pc = (connection as DataConnection & { peerConnection?: RTCPeerConnection }).peerConnection;
       const result = this.currentDiagnostics(pc);
+      const now = performance.now();
+      if (now - this.lastFpsAt >= 1000) {
+        result.fps = this.receivedFrames * 1000 / (now - this.lastFpsAt);
+        this.receivedFrames = 0;
+        this.lastFpsAt = now;
+      }
       if (pc) {
         try {
           const reports = await pc.getStats();
@@ -164,7 +204,9 @@ export class PeerSession {
       ice: direct?.iceConnectionState || 'unavailable',
       gathering: direct?.iceGatheringState || 'unavailable',
       candidate: 'unavailable',
+      channel: (this.connection as DataConnection & { dataChannel?: RTCDataChannel } | null)?.dataChannel?.readyState || 'unavailable',
       rtt: null,
+      fps: null,
       error: this.lastError,
     };
   }
