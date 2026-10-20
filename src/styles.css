@@ -9,6 +9,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 button { cursor: pointer; border: 0; border-radius: 14px; padding: 14px 18px; background: #ff5ca8; color: #fff; font-weight: 900; box-shadow: 0 7px 0 #a72f6f; transition: transform .15s, filter .15s; }
 button:hover { filter: brightness(1.1); transform: translateY(-2px); }
 button:active { transform: translateY(3px); box-shadow: 0 3px 0 #a72f6f; }
+button:disabled { cursor: not-allowed; filter: grayscale(.5); opacity: .6; transform: none; }
 button.secondary { background: #2c1d4b; box-shadow: none; border: 1px solid #6b4f8b; }
 .home, .game-shell { width: min(1120px, calc(100% - 32px)); margin: 0 auto; padding: 44px 0; }
 .home { min-height: 100vh; display: grid; align-content: center; gap: 28px; max-width: 680px; }
@@ -55,6 +56,9 @@ aside { display: grid; gap: 14px; }
 .approval, .status-panel { background: #211239; border: 1px solid #624680; border-radius: 16px; padding: 16px; }
 .approval { display: grid; gap: 14px; }
 .approval div { display: flex; gap: 8px; }
+.lobby { display: grid; gap: 6px; padding: 14px; background: #160d2c; border: 1px solid #4c3569; border-radius: 14px; }
+.lobby div { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; }
+.lobby strong { color: #79e7bc; text-transform: capitalize; }
 .status-panel strong { display: block; line-height: 1.35; margin-bottom: 14px; }
 dl { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin: 0; font-size: 13px; }
 dt { color: #a994c0; } dd { margin: 0; text-align: right; color: #79e7bc; }

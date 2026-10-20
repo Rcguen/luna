@@ -37,6 +37,14 @@ from `anon`/`PUBLIC`, enables RLS, and checks `auth.uid()` on every owner policy
 Composite foreign keys bind each session/save row to a game owned by the same
 user.
 
+### Multi-seat session authorization
+
+The host now assigns slots 2–4, rejects duplicate session IDs and connections
+beyond the selected capacity, and validates control/media messages before
+routing them. Guests receive only the stream for their assigned slot. This is
+session authorization, not account authentication; room codes and PeerJS IDs
+remain discoverable identifiers.
+
 ## Remaining risks
 
 1. PeerJS uses public signaling and public STUN servers. No TURN relay is

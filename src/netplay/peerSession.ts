@@ -14,6 +14,8 @@ export type Diagnostics = {
   error: string;
 };
 
+export type PlayerSlot = 1 | 2 | 3 | 4;
+
 export type SessionEvents = {
   status: (text: string) => void;
   diagnostics: (value: Diagnostics) => void;
@@ -120,7 +122,7 @@ export class PeerSession {
   private attach(connection: DataConnection, hostSide: boolean): void {
     this.connection = connection;
     connection.on('open', () => {
-      this.send({ type: 'hello', protocol: 1 });
+      this.send({ type: 'hello', protocol: 1, clientId: `legacy-${Date.now()}` });
       this.events.status(hostSide ? 'Guest connected; approval required.' : 'Connected to host; awaiting approval.');
     });
     connection.on('data', (value) => this.handle(value, hostSide));

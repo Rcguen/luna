@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { GbaEngine, type EngineFrame } from './engine/wasmAdapter';
-import { PeerSession, type Diagnostics } from './netplay/peerSession';
+import { type Diagnostics, type PlayerSlot } from './netplay/peerSession';
+import { MultiPeerSession, type MultiGuestRequest } from './netplay/multiPeerSession';
 import { TouchControls } from './components/TouchControls';
 import { AuthPanel } from './components/AuthPanel';
 import { GameLibrary } from './components/GameLibrary';
@@ -18,14 +19,18 @@ export default function App() {
   const [screen, setScreen] = useState<Screen>('home');
   const [room, setRoom] = useState('');
   const [roomCode, setRoomCode] = useState('');
-  const [status, setStatus] = useState('Ready for a two-player session.');
+  const [roomCapacity, setRoomCapacity] = useState(2);
+  const [status, setStatus] = useState('Ready for a 2-player session.');
   const [romName, setRomName] = useState('No ROM loaded');
   const [romLoaded, setRomLoaded] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const [currentGame, setCurrentGame] = useState<GameRecord | null>(null);
   const [libraryRefresh, setLibraryRefresh] = useState(0);
-  const [pendingGuest, setPendingGuest] = useState(false);
+  const [pendingGuest, setPendingGuest] = useState<MultiGuestRequest | null>(null);
   const [approved, setApproved] = useState(false);
+  const [gameStarted, setGameStarted] = useState(false);
+  const [assignedSlot, setAssignedSlot] = useState<PlayerSlot | null>(null);
+  const [playerStates, setPlayerStates] = useState<Record<number, 'waiting' | 'pending' | 'connected' | 'disconnected'>>({ 1: 'connected', 2: 'waiting', 3: 'waiting', 4: 'waiting' });
   const [diagnostics, setDiagnostics] = useState(EMPTY_DIAGNOSTICS);
   const [guestFrame, setGuestFrame] = useState<FrameMessage | null>(null);
   const engineRef = useRef<GbaEngine | null>(null);
@@ -42,9 +47,9 @@ export default function App() {
     if (invitedRoom.length === 6) setRoom(invitedRoom);
   }, []);
 
-  const newEngine = async () => {
+  const newEngine = async (players = roomCapacity) => {
     const engine = new GbaEngine();
-    await engine.start(2);
+    await engine.start(players);
     engineRef.current = engine;
     return engine;
   };
@@ -52,28 +57,25 @@ export default function App() {
   const makeEvents = (hostSide: boolean) => ({
     status: (text: string) => setStatus(text),
     diagnostics: (value: Diagnostics) => setDiagnostics(value),
-    guestRequest: (approveGuest: () => void, rejectGuest: () => void) => {
-      setPendingGuest(true);
-      (window as Window & { kirbyApprove?: () => void; kirbyReject?: () => void }).kirbyApprove = () => { approveGuest(); setPendingGuest(false); setApproved(true); };
-      (window as Window & { kirbyApprove?: () => void; kirbyReject?: () => void }).kirbyReject = () => { rejectGuest(); setPendingGuest(false); };
-    },
-    input: (keys: number) => { if (hostSide) engineRef.current?.setKeys(1, keys); },
-    frame: (frame: FrameMessage) => { if (!hostSide) setGuestFrame(frame); },
-    audio: (audio: AudioMessage) => { if (!hostSide) playAudio(audio); },
-    closed: () => { setApproved(false); setStatus('Peer disconnected. Input released.'); if (hostSide) engineRef.current?.setKeys(1, 0); },
+    guestRequest: (request: MultiGuestRequest) => { setPendingGuest(request); setPlayerStates((states) => ({ ...states, [request.slot]: 'pending' })); },
+    input: (slot: PlayerSlot, keys: number) => { if (hostSide) engineRef.current?.setKeys(slot - 1, keys); },
+    frame: (slot: PlayerSlot, frame: FrameMessage) => { if (!hostSide && slot === assignedSlot) setGuestFrame(frame); },
+    audio: (_slot: PlayerSlot, audio: AudioMessage) => { if (!hostSide) playAudio(audio); },
+    connection: (slot: PlayerSlot, state: 'pending' | 'connected' | 'disconnected', capacity?: number) => { setPlayerStates((states) => { const next = { ...states, [slot]: state }; if (hostSide) setApproved(Object.entries(next).some(([player, value]) => Number(player) > 1 && value === 'connected')); return next; }); if (state === 'connected') { setApproved(true); setAssignedSlot(slot); if (capacity) setRoomCapacity(capacity); } if (state === 'disconnected') { if (hostSide) engineRef.current?.setKeys(slot - 1, 0); } },
+    closed: () => { setApproved(false); setAssignedSlot(null); setStatus('Peer disconnected. Input released.'); if (hostSide) for (let slot = 1; slot < roomCapacity; slot += 1) engineRef.current?.setKeys(slot, 0); },
   });
 
   const startHost = async () => {
     try {
       setStatus('Starting the linked host engine…');
-      const engine = await newEngine();
+      const engine = await newEngine(roomCapacity);
       if (romBytesRef.current) engine.loadRom(romBytesRef.current);
-      const session = new PeerSession(makeEvents(true));
+      const session = new MultiPeerSession(makeEvents(true));
       sessionRef.current = session;
       audioContext.current = new AudioContext();
       (window as Window & { kirbyAudio?: AudioContext }).kirbyAudio = audioContext.current;
       await audioContext.current.resume().catch(() => undefined);
-      const code = await session.host();
+      const code = await session.host(roomCapacity);
       setRoomCode(code);
       setScreen('host');
     } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
@@ -84,7 +86,7 @@ export default function App() {
       const clean = room.replace(/\D/g, '');
       if (clean.length !== 6) { setStatus('Enter the six-digit room code.'); return; }
       setStatus('Connecting to host…');
-      const session = new PeerSession(makeEvents(false));
+      const session = new MultiPeerSession(makeEvents(false));
       sessionRef.current = session;
       audioContext.current = new AudioContext();
       (window as Window & { kirbyAudio?: AudioContext }).kirbyAudio = audioContext.current;
@@ -111,7 +113,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (screen !== 'host' || !romLoaded) return;
+    if (screen !== 'host' || !romLoaded || !gameStarted) return;
     let raf = 0;
     let last = performance.now();
     let frameAccumulator = 0;
@@ -125,28 +127,24 @@ export default function App() {
       if (local) drawFrame(hostCanvas.current, local);
       const shouldSend = now - lastSent >= 33 && approved && sessionRef.current;
       if (shouldSend) {
-        const canvas = document.createElement('canvas');
-        const remote = engine.frame(1);
-        if (remote) {
-          canvas.width = remote.width; canvas.height = remote.height;
-          drawFrame(canvas, remote);
-          canvas.toBlob(async (blob) => {
-            if (!blob) return;
-            sessionRef.current?.sendFrame({ type: 'frame', width: remote.width, height: remote.height, data: await blob.arrayBuffer() });
-          }, 'image/jpeg', 0.78);
+        for (let slot = 2; slot <= roomCapacity; slot += 1) {
+          const remote = engine.frame(slot - 1);
+          if (!remote) continue;
+          const canvas = document.createElement('canvas'); canvas.width = remote.width; canvas.height = remote.height; drawFrame(canvas, remote);
+          canvas.toBlob(async (blob) => { if (blob) sessionRef.current?.sendFrame(slot as PlayerSlot, { type: 'frame', width: remote.width, height: remote.height, data: await blob.arrayBuffer() }); }, 'image/jpeg', 0.78);
         }
         lastSent = now;
       }
       const audio = engine.drainAudio();
       if (audio) {
         playPcm(audio.rate, audio.samples);
-        if (shouldSend) sessionRef.current?.sendAudio({ type: 'audio', rate: audio.rate, data: audio.samples.buffer as ArrayBuffer });
+        if (shouldSend) for (let slot = 2; slot <= roomCapacity; slot += 1) sessionRef.current?.sendAudio(slot as PlayerSlot, { type: 'audio', rate: audio.rate, data: audio.samples.buffer as ArrayBuffer });
       }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [screen, romLoaded, approved]);
+  }, [screen, romLoaded, gameStarted, approved, roomCapacity]);
 
   useEffect(() => {
     if (!guestFrame || !guestCanvas.current) return;
@@ -178,19 +176,21 @@ export default function App() {
 
   useEffect(() => () => { sessionRef.current?.close(); engineRef.current?.stop(); }, []);
 
-  const leave = () => { sessionRef.current?.close(); engineRef.current?.stop(); sessionRef.current = null; engineRef.current = null; romBytesRef.current = null; setRomLoaded(false); setScreen('home'); setStatus('Session ended.'); };
+  const startGame = () => { if (!romLoaded) { setStatus('Load your legal ROM before starting.'); return; } if (Object.values(playerStates).slice(1, roomCapacity).some((state) => state !== 'connected')) { setStatus(`Waiting for all ${roomCapacity - 1} guest seat${roomCapacity > 2 ? 's' : ''} to connect.`); return; } setGameStarted(true); setStatus('Game started.'); };
+  const leave = () => { sessionRef.current?.close(); engineRef.current?.stop(); sessionRef.current = null; engineRef.current = null; romBytesRef.current = null; setRomLoaded(false); setGameStarted(false); setPendingGuest(null); setApproved(false); setAssignedSlot(null); setScreen('home'); setStatus(`Ready for a ${roomCapacity}-player session.`); };
   const inviteLink = roomCode ? `${window.location.origin}${window.location.pathname}?room=${roomCode}` : '';
   const copyInvite = async () => { if (!inviteLink) return; await navigator.clipboard?.writeText(inviteLink); setStatus('Invite link copied.'); };
 
-  if (screen === 'host') return <GameShell title="Host room" subtitle={`Room ${formatCode(roomCode)}`} canvasRef={hostCanvas} local>
+  if (screen === 'host') return <GameShell title="Host room" subtitle={`${roomCapacity}-player room · ${formatCode(roomCode)}`} canvasRef={hostCanvas} local>
     <div className="room-code">{formatCode(roomCode)}</div><p className="muted">Share this code or the invite link. The guest still needs your approval.</p><div className="invite-row"><input aria-label="Invite link" readOnly value={inviteLink} /><button className="secondary" onClick={() => void copyInvite()}>Copy invite</button></div>
-    {pendingGuest && <div className="approval"><strong>Guest wants to join Player 2</strong><div><button onClick={() => (window as Window & { kirbyApprove?: () => void }).kirbyApprove?.()}>Approve</button><button className="secondary" onClick={() => (window as Window & { kirbyReject?: () => void }).kirbyReject?.()}>Reject</button></div></div>}
-    <StatusPanel diagnostics={diagnostics} status={status} /><label className="file-button">{romLoaded ? `Change ROM (${romName})` : 'Load your legal ROM'}<input type="file" accept=".gba,.gb,.gbc" onChange={(e) => e.target.files?.[0] && loadRom(e.target.files[0])} /></label><button className="secondary" onClick={leave}>End session</button>
+    {pendingGuest && <div className="approval"><strong>Guest requests Player {pendingGuest.slot}</strong><div><button onClick={() => { pendingGuest.approve(); setPendingGuest(null); }}>Approve</button><button className="secondary" onClick={() => { pendingGuest.reject(); setPendingGuest(null); }}>Reject</button></div></div>}
+    <div className="lobby">{Array.from({ length: roomCapacity }, (_, index) => index + 1).map((slot) => <div key={slot}><span>Player {slot}{slot === 1 ? ' · Host' : ''}</span><strong>{playerStates[slot]}</strong></div>)}</div>
+    <StatusPanel diagnostics={diagnostics} status={status} /><label className="file-button">{romLoaded ? `Change ROM (${romName})` : 'Load your legal ROM'}<input type="file" accept=".gba,.gb,.gbc" onChange={(e) => e.target.files?.[0] && loadRom(e.target.files[0])} /></label><button onClick={startGame} disabled={gameStarted}>{gameStarted ? 'Game running' : 'Start game'}</button><button className="secondary" onClick={leave}>End session</button>
   </GameShell>;
 
-  if (screen === 'guest') return <GameShell title="Guest Player 2" subtitle={`Room ${formatCode(roomCode)}`} canvasRef={guestCanvas}><StatusPanel diagnostics={diagnostics} status={status} /><TouchControls onKeys={(keys) => sessionRef.current?.sendInput(keys)} /><button className="secondary" onClick={leave}>Disconnect</button></GameShell>;
+  if (screen === 'guest') return <GameShell title={`Guest Player ${assignedSlot || '…'}`} subtitle={`${roomCapacity}-player room · ${formatCode(roomCode)}`} canvasRef={guestCanvas}><StatusPanel diagnostics={diagnostics} status={status} /><TouchControls onKeys={(keys) => sessionRef.current?.sendInput(keys)} /><button className="secondary" onClick={leave}>Disconnect</button></GameShell>;
 
-  return <main className="home"><div className="brand"><span className="star" aria-hidden="true">✦</span><p className="eyebrow">ONLINE GBA ADVENTURES</p><h1>Luna</h1><p className="lede">Two linked players. One shared adventure.</p></div><AuthPanel onSession={setSession} /><section className="home-card" aria-labelledby="play-heading"><p id="play-heading" className="eyebrow">PLAY</p><button onClick={startHost}>Create room <span aria-hidden="true">→</span></button><div className="join-row"><input aria-label="Six-digit room code" inputMode="numeric" maxLength={6} placeholder="ROOM CODE" value={room} onChange={(e) => setRoom(e.target.value.replace(/\D/g, ''))} /><button className="secondary" onClick={joinRoom}>Join</button></div><label className="file-button home-file">Load ROM for host<input aria-label="Load a legal ROM" type="file" accept=".gba,.gb,.gbc" onChange={(e) => e.target.files?.[0] && loadRom(e.target.files[0])} /></label><p className="status" role="status">{status}</p></section><GameLibrary userId={session?.user.id || null} refreshKey={libraryRefresh} /><footer>ROMs stay on your device. Guests receive Player 2 video and send Player 2 controls. Guests may join without an account.</footer></main>;
+  return <main className="home"><div className="brand"><span className="star" aria-hidden="true">✦</span><p className="eyebrow">ONLINE GBA ADVENTURES</p><h1>Luna</h1><p className="lede">Two linked players. One shared adventure.</p></div><AuthPanel onSession={setSession} /><section className="home-card" aria-labelledby="play-heading"><p id="play-heading" className="eyebrow">PLAY</p><label className="muted" htmlFor="room-capacity">Players per room</label><select id="room-capacity" value={roomCapacity} onChange={(e) => { const value = Number(e.target.value); setRoomCapacity(value); setStatus(`Ready for a ${value}-player session.`); }}><option value="2">2 players</option><option value="3">3 players</option><option value="4">4 players</option></select><button onClick={startHost}>Create room <span aria-hidden="true">→</span></button><div className="join-row"><input aria-label="Six-digit room code" inputMode="numeric" maxLength={6} placeholder="ROOM CODE" value={room} onChange={(e) => setRoom(e.target.value.replace(/\D/g, ''))} /><button className="secondary" onClick={joinRoom}>Join</button></div><label className="file-button home-file">Load ROM for host<input aria-label="Load a legal ROM" type="file" accept=".gba,.gb,.gbc" onChange={(e) => e.target.files?.[0] && loadRom(e.target.files[0])} /></label><p className="status" role="status">{status}</p></section><GameLibrary userId={session?.user.id || null} refreshKey={libraryRefresh} /><footer>Host runs {roomCapacity} linked consoles. Each guest receives only their assigned Player 2–4 video and sends only their assigned controls. Guests may join without an account.</footer></main>;
 }
 
 function drawFrame(canvas: HTMLCanvasElement | null, frame: EngineFrame) { if (!canvas) return; canvas.width = frame.width; canvas.height = frame.height; const image = new ImageData(frame.width, frame.height); image.data.set(frame.rgba); canvas.getContext('2d')?.putImageData(image, 0, 0); }
