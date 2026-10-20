@@ -26,6 +26,7 @@ export default function App() {
   const hostCanvas = useRef<HTMLCanvasElement>(null);
   const guestCanvas = useRef<HTMLCanvasElement>(null);
   const audioContext = useRef<AudioContext | null>(null);
+  const audioNextTime = useRef(0);
   const guestKeys = useRef(0);
 
   const newEngine = async () => {
@@ -55,6 +56,9 @@ export default function App() {
       await newEngine();
       const session = new PeerSession(makeEvents(true));
       sessionRef.current = session;
+      audioContext.current = new AudioContext();
+      (window as Window & { kirbyAudio?: AudioContext }).kirbyAudio = audioContext.current;
+      await audioContext.current.resume().catch(() => undefined);
       const code = await session.host();
       setRoomCode(code);
       setScreen('host');
@@ -71,8 +75,7 @@ export default function App() {
       await session.join(clean);
       setRoomCode(clean);
       setScreen('guest');
-      audioContext.current = new AudioContext();
-      (window as Window & { kirbyAudio?: AudioContext }).kirbyAudio = audioContext.current;
+      await audioContext.current.resume().catch(() => undefined);
     } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
   };
 
@@ -112,7 +115,10 @@ export default function App() {
           }, 'image/jpeg', 0.78);
         }
         const audio = engine.drainAudio();
-        if (audio) sessionRef.current.sendAudio({ type: 'audio', rate: audio.rate, data: audio.samples.buffer as ArrayBuffer });
+        if (audio) {
+          playPcm(audio.rate, audio.samples);
+          sessionRef.current.sendAudio({ type: 'audio', rate: audio.rate, data: audio.samples.buffer as ArrayBuffer });
+        }
         lastSent = now;
       } else { engine.drainAudio(); }
       raf = requestAnimationFrame(tick);
@@ -169,9 +175,20 @@ function drawFrame(canvas: HTMLCanvasElement | null, frame: EngineFrame) { if (!
 function playAudio(audio: AudioMessage) {
   const context = (window as Window & { kirbyAudio?: AudioContext }).kirbyAudio; if (!context) return;
   const bytes = audio.data instanceof ArrayBuffer ? audio.data : (audio.data as unknown as Uint8Array).buffer;
-  const samples = new Int16Array(bytes); const buffer = context.createBuffer(2, samples.length / 2, audio.rate);
-  buffer.copyToChannel(Float32Array.from(samples.filter((_, index) => index % 2 === 0), (value) => value / 32768), 0); buffer.copyToChannel(Float32Array.from(samples.filter((_, index) => index % 2 === 1), (value) => value / 32768), 1);
-  const source = context.createBufferSource(); source.buffer = buffer; source.connect(context.destination); source.start();
+  playPcm(audio.rate, new Int16Array(bytes));
+}
+
+function playPcm(rate: number, samples: Int16Array) {
+  const context = (window as Window & { kirbyAudio?: AudioContext }).kirbyAudio; if (!context || samples.length < 2) return;
+  void context.resume();
+  const frames = Math.floor(samples.length / 2);
+  const buffer = context.createBuffer(2, frames, rate);
+  const left = new Float32Array(frames); const right = new Float32Array(frames);
+  for (let i = 0; i < frames; i++) { left[i] = samples[i * 2] / 32768; right[i] = samples[i * 2 + 1] / 32768; }
+  buffer.copyToChannel(left, 0); buffer.copyToChannel(right, 1);
+  const source = context.createBufferSource(); source.buffer = buffer; source.connect(context.destination);
+  const start = Math.max(context.currentTime + 0.02, audioNextTime.current);
+  source.start(start); audioNextTime.current = start + buffer.duration;
 }
 
 function GameShell({ title, subtitle, canvasRef, children, local = false }: { title: string; subtitle: string; canvasRef: React.RefObject<HTMLCanvasElement>; children: React.ReactNode; local?: boolean }) { return <main className="game-shell"><header><div><p className="eyebrow">KIRBY ONLINE</p><h1>{title}</h1><p className="muted">{subtitle}</p></div><span className={`live-dot ${local ? 'host' : ''}`}>{local ? 'HOST' : 'GUEST'}</span></header><section className="play-layout"><div className="screen-card"><canvas ref={canvasRef} aria-label="Game screen" /><div className="screen-caption">{local ? 'PLAYER 1 · LOCAL' : 'PLAYER 2 · REMOTE'}</div></div><aside>{children}</aside></section></main>; }
