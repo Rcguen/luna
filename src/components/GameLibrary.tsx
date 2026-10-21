@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { BatteryTechnology } from '../engine/wasmAdapter';
 import type { GameRecord, SaveRecord } from '../lib/cloudSaves';
 import { deleteSave, downloadSave, latestSave, listGames, listSaves, uploadSave } from '../lib/cloudSaves';
-import { batterySize, getLocalBattery, localPlayerId, putLocalBattery, setCloudRevision } from '../lib/localBatterySaves';
+import { batterySize, getLocalBatteryForUser, localPlayerId, putLocalBattery, setCloudRevision } from '../lib/localBatterySaves';
 import { ChoiceMenu } from './ChoiceMenu';
 
 const saveTypeOptions = [{ value: 'battery', label: 'Battery save (.sav)' }, { value: 'state', label: 'Save state (not connected)' }] as const;
@@ -29,9 +29,9 @@ export function GameLibrary({ userId, refreshKey = 0, onLoadGame }: { userId: st
   if (!userId) return null;
 
   const exportCurrent = async (game: GameRecord) => {
-    const local = await getLocalBattery(game.rom_hash, localPlayerId(userId));
-    if (!local) throw new Error('No local battery save exists yet. Play and use the game’s own save feature first.');
-    download(local.image.bytes, `${safeName(game.title)}.sav`);
+    const local = await getLocalBatteryForUser(game.rom_hash, userId);
+    if (!local.saved) throw new Error('No local battery save exists yet. Play and use the game’s own save feature first.');
+    download(local.saved.image.bytes, `${safeName(game.title)}.sav`);
   };
   const downloadCloudBackup = async (save: SaveRecord) => download(await downloadSave(save), `${save.save_type}-player-${save.player_slot}-r${save.revision}.bin`);
   const importBattery = async (game: GameRecord, file: File, technology: BatteryTechnology) => {

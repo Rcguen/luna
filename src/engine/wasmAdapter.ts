@@ -132,10 +132,12 @@ export class GbaEngine {
     const height = module._mgs_get_video_height(player);
     const ptr = module._mgs_get_video(player);
     if (!ptr || !width || !height) return null;
-    const bytes = module.HEAPU8.slice(ptr, ptr + width * height * 4);
+    // The frame is consumed synchronously by drawFrame. Keep a view over WASM
+    // memory instead of copying ~150 KiB into a second buffer every frame.
+    const bytes = new Uint8ClampedArray(module.HEAPU8.buffer, ptr, width * height * 4);
     this.state.framesRendered += 1;
     this.state.lastFrame = `${width}×${height}`;
-    return { width, height, rgba: new Uint8ClampedArray(bytes.buffer) };
+    return { width, height, rgba: bytes };
   }
 
   setKeys(player: number, keys: number): void { this.requireModule()._mgs_set_keys(player, keys >>> 0); }

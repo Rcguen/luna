@@ -45,7 +45,9 @@ Never replace only one artifact. Verify SHA-256 hashes after copying, then run
 ## Persistence order
 
 1. Load the ROM and compute its SHA-256.
-2. Resolve the signed-in user identity or persistent device-local identity.
+2. Resolve a stable device-local identity. It does not change while Supabase
+   restores a session or when the player signs in or out. Older auth-scoped
+   local saves are migrated on first load.
 3. Read and checksum-validate the current IndexedDB image, falling back to its
    backup when needed.
 4. Optionally download a newer cloud image only when the local image is known

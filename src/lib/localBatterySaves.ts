@@ -23,12 +23,26 @@ const SIZES: Record<BatteryTechnology, number> = { 1: 32768, 2: 65536, 3: 131072
 export function batterySize(type: number): number { return SIZES[type as BatteryTechnology] || 0; }
 export function batteryKey(romHash: string, ownerId: string): string { return `v1:battery:${romHash}:${ownerId}`; }
 
-export function localPlayerId(userId: string | null): string {
-  if (userId) return `user:${userId}`;
+export function localPlayerId(_userId: string | null = null): string {
   const key = 'luna:local-player-id';
   let id = localStorage.getItem(key);
   if (!id) { id = crypto.randomUUID(); localStorage.setItem(key, id); }
   return `device:${id}`;
+}
+
+/** Read the stable device save and migrate the older auth-scoped key created
+ * by Luna 0.1. The local key must not change while Supabase restores a session. */
+export async function getLocalBatteryForUser(romHash: string, userId: string | null): Promise<{ ownerId: string; saved: Awaited<ReturnType<typeof getLocalBattery>> }> {
+  const ownerId = localPlayerId();
+  let saved = await getLocalBattery(romHash, ownerId);
+  if (!saved && userId) {
+    const legacy = await getLocalBattery(romHash, `user:${userId}`);
+    if (legacy) {
+      const migrated = await putLocalBattery(romHash, ownerId, legacy.image.technology, legacy.image.bytes);
+      saved = { save: migrated, image: migrated.current, recovered: legacy.recovered };
+    }
+  }
+  return { ownerId, saved };
 }
 
 export async function batteryChecksum(bytes: ArrayBuffer): Promise<string> {

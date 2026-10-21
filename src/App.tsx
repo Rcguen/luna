@@ -7,7 +7,7 @@ import { TouchControls } from './components/TouchControls';
 import { HomeView, type OnlineMode } from './components/HomeView';
 import { downloadSave, latestSave, listGames, registerGame, SaveConflictError, uploadSave, type GameRecord } from './lib/cloudSaves';
 import { cacheRom, getCachedRom, hashRom } from './lib/localRoms';
-import { batterySize, getLocalBattery, localPlayerId, putLocalBattery, setCloudRevision } from './lib/localBatterySaves';
+import { batterySize, getLocalBatteryForUser, putLocalBattery, setCloudRevision } from './lib/localBatterySaves';
 import type { Session } from '@supabase/supabase-js';
 import type { AudioMessage, FrameMessage } from './netplay/protocol';
 import './styles.css';
@@ -130,8 +130,9 @@ export default function App() {
   const restoreLocalBattery = async (engine: GbaEngine, bytes: Uint8Array) => {
     if (!engine.supportsBatterySave()) throw new Error('This WASM build cannot persist battery saves. The game was not started to protect your progress.');
     const hash = await hashRom(bytes);
-    const ownerId = localPlayerId(session?.user.id || null);
-    let saved = await getLocalBattery(hash, ownerId);
+    const local = await getLocalBatteryForUser(hash, session?.user.id || null);
+    const ownerId = local.ownerId;
+    let saved = local.saved;
     let message = saved ? saved.recovered ? 'Restored the verified local backup; the newest save was damaged.' : 'Restored your local battery save.' : 'No previous battery save found. Progress will save locally.';
     const cloud = session && currentGame?.rom_hash === hash ? { userId: session.user.id, gameId: currentGame.id } : null;
     if (cloud) {
@@ -475,8 +476,11 @@ export default function App() {
       const engine = engineRef.current;
       if (!engine) return;
       try {
-        frameAccumulator += Math.min(100, now - last); last = now;
-        while (frameAccumulator >= 16.67) { engine.runFrame(); frameAccumulator -= 16.67; }
+        // Bound catch-up work. Running six frames after a mobile browser stall
+        // creates a feedback loop where rendering/audio fall even farther behind.
+        frameAccumulator = Math.min(33.34, frameAccumulator + Math.min(34, now - last)); last = now;
+        let framesThisTick = 0;
+        while (frameAccumulator >= 16.67 && framesThisTick < 2) { engine.runFrame(); frameAccumulator -= 16.67; framesThisTick += 1; }
         const local = engine.frame(0);
         if (local) drawFrame(hostCanvas.current, local);
       } catch (error) {
@@ -524,7 +528,7 @@ export default function App() {
         // through the per-slot audio messages above.
         playPcm(localAudio.rate, localAudio.samples);
       }
-      if (now - lastEngineUpdate.current >= 250) { setEngineStatus(engine.diagnostics()); lastEngineUpdate.current = now; }
+      if (now - lastEngineUpdate.current >= 500) { setEngineStatus(engine.diagnostics()); lastEngineUpdate.current = now; }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -609,10 +613,12 @@ export default function App() {
 
   useEffect(() => {
     if (screen !== 'solo' && screen !== 'host') return;
-    const timer = window.setInterval(() => { void persistLocalBattery().catch(() => undefined); }, 15000);
+    const timer = window.setInterval(() => { void persistLocalBattery().catch(() => undefined); }, 5000);
     const onVisibility = () => { if (document.visibilityState === 'hidden') void persistLocalBattery().catch(() => undefined); };
+    const onPageHide = () => { void persistLocalBattery().catch(() => undefined); };
     document.addEventListener('visibilitychange', onVisibility);
-    return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', onVisibility); };
+    window.addEventListener('pagehide', onPageHide);
+    return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', onVisibility); window.removeEventListener('pagehide', onPageHide); };
   }, [screen]);
 
   const startGame = () => { if (!romLoaded) { setStatus('Load your legal ROM before starting.'); return; } setGameStarted(true); setStatus(Object.values(playerStates).slice(1, roomCapacity).some((state) => state !== 'connected') ? 'Game running; waiting for remaining guest seats.' : 'Game started.'); };
@@ -709,9 +715,8 @@ function playPcm(rate: number, samples: Int16Array) {
   void context.resume();
   const frames = Math.floor(samples.length / 2);
   const buffer = context.createBuffer(2, frames, rate);
-  const left = new Float32Array(frames); const right = new Float32Array(frames);
+  const left = buffer.getChannelData(0); const right = buffer.getChannelData(1);
   for (let i = 0; i < frames; i++) { left[i] = samples[i * 2] / 32768; right[i] = samples[i * 2 + 1] / 32768; }
-  buffer.copyToChannel(left, 0); buffer.copyToChannel(right, 1);
   const source = context.createBufferSource(); source.buffer = buffer; source.connect(context.destination);
   const now = context.currentTime;
   const minLead = 0.02;

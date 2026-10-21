@@ -4,23 +4,48 @@ type Props = { onKeys: (keys: number) => void };
 const bit = { a: 0x001, b: 0x002, select: 0x004, start: 0x008, right: 0x010, left: 0x020, up: 0x040, down: 0x080, r: 0x100, l: 0x200 } as const;
 
 export function TouchControls({ onKeys }: Props) {
-  const held = useRef(new Map<number, number>());
+  const held = useRef(new Map<number, { value: number; element: HTMLButtonElement }>());
   const onKeysRef = useRef(onKeys);
   onKeysRef.current = onKeys;
   useEffect(() => {
-    const releaseAll = () => { if (held.current.size) { held.current.clear(); onKeysRef.current(0); } };
+    const releaseAll = () => {
+      if (!held.current.size) return;
+      for (const press of held.current.values()) press.element.classList.remove('is-pressed');
+      held.current.clear();
+      onKeysRef.current(0);
+    };
+    const releasePointer = (event: PointerEvent) => update(event.pointerId, 0, null);
     const releaseWhenHidden = () => { if (document.hidden) releaseAll(); };
     window.addEventListener('blur', releaseAll);
+    window.addEventListener('pagehide', releaseAll);
+    window.addEventListener('pointerup', releasePointer, true);
+    window.addEventListener('pointercancel', releasePointer, true);
     document.addEventListener('visibilitychange', releaseWhenHidden);
-    return () => { window.removeEventListener('blur', releaseAll); document.removeEventListener('visibilitychange', releaseWhenHidden); releaseAll(); };
+    return () => {
+      window.removeEventListener('blur', releaseAll);
+      window.removeEventListener('pagehide', releaseAll);
+      window.removeEventListener('pointerup', releasePointer, true);
+      window.removeEventListener('pointercancel', releasePointer, true);
+      document.removeEventListener('visibilitychange', releaseWhenHidden);
+      releaseAll();
+    };
   }, []);
-  const update = (pointerId: number, value: number, active: boolean) => {
-    if (active) held.current.set(pointerId, value);
-    else if (!held.current.delete(pointerId)) return;
-    onKeysRef.current([...held.current.values()].reduce((keys, key) => keys | key, 0));
+  const update = (pointerId: number, value: number, element: HTMLButtonElement | null) => {
+    const previous = held.current.get(pointerId);
+    if (previous) {
+      held.current.delete(pointerId);
+      if (![...held.current.values()].some((press) => press.element === previous.element)) previous.element.classList.remove('is-pressed');
+    }
+    if (element) {
+      held.current.set(pointerId, { value, element });
+      element.classList.add('is-pressed');
+    } else if (!previous) return;
+    let keys = 0;
+    for (const press of held.current.values()) keys |= press.value;
+    onKeysRef.current(keys);
   };
   const button = (label: string, value: number, name = label) => (
-    <button type="button" aria-label={name} className="touch-button" onContextMenu={(e) => e.preventDefault()} onPointerDown={(e) => { e.preventDefault(); e.currentTarget.setPointerCapture(e.pointerId); update(e.pointerId, value, true); }} onPointerUp={(e) => { e.preventDefault(); update(e.pointerId, value, false); }} onPointerCancel={(e) => update(e.pointerId, value, false)} onLostPointerCapture={(e) => update(e.pointerId, value, false)}>{label}</button>
+    <button type="button" aria-label={name} className="touch-button" onContextMenu={(e) => e.preventDefault()} onPointerDown={(e) => { e.preventDefault(); try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* global release handlers are the fallback */ } update(e.pointerId, value, e.currentTarget); }} onPointerUp={(e) => { e.preventDefault(); update(e.pointerId, value, null); }} onPointerCancel={(e) => update(e.pointerId, value, null)} onLostPointerCapture={(e) => update(e.pointerId, value, null)}>{label}</button>
   );
   return <div className="touch-controls" aria-label="GBA touch controls">
     <div className="dpad">{button('▲', bit.up, 'Up')}{button('◀', bit.left, 'Left')}<span className="dpad-center" aria-hidden="true">✦</span>{button('▶', bit.right, 'Right')}{button('▼', bit.down, 'Down')}</div>
