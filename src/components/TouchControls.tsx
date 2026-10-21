@@ -9,8 +9,13 @@ export function TouchControls({ onKeys }: Props) {
   onKeysRef.current = onKeys;
   useEffect(() => {
     const releaseAll = () => {
-      if (!held.current.size) return;
       for (const press of held.current.values()) press.element.classList.remove('is-pressed');
+      // A browser can lose the final pointer event while the page is being
+      // rotated, backgrounded, or interrupted by browser chrome. Clear any
+      // stale class as well as the pointer map so the visual state can never
+      // remain pressed after the input state was released.
+      document.querySelectorAll<HTMLButtonElement>('.touch-button.is-pressed').forEach((element) => element.classList.remove('is-pressed'));
+      if (!held.current.size) return;
       held.current.clear();
       onKeysRef.current(0);
     };
@@ -20,12 +25,14 @@ export function TouchControls({ onKeys }: Props) {
     window.addEventListener('pagehide', releaseAll);
     window.addEventListener('pointerup', releasePointer, true);
     window.addEventListener('pointercancel', releasePointer, true);
+    window.addEventListener('lostpointercapture', releasePointer, true);
     document.addEventListener('visibilitychange', releaseWhenHidden);
     return () => {
       window.removeEventListener('blur', releaseAll);
       window.removeEventListener('pagehide', releaseAll);
       window.removeEventListener('pointerup', releasePointer, true);
       window.removeEventListener('pointercancel', releasePointer, true);
+      window.removeEventListener('lostpointercapture', releasePointer, true);
       document.removeEventListener('visibilitychange', releaseWhenHidden);
       releaseAll();
     };
