@@ -1,41 +1,39 @@
-# Luna — GBA Multiplayer
+# Luna — Your game space
 
-Luna is a browser-based multiplayer front end for Game Boy Advance games. It
-supports 2–4 player rooms for GBA titles that support multiplayer or link-cable
-play. The host runs the linked mGBA instances; guests connect from another
-device, receive their player's video and audio stream, and send controller
-input back to the host.
+Luna is a browser-based home for your own games: keep a library, pick up where
+you left off, and play solo or with friends. The interface is designed to grow
+into a multi-system game hub rather than being tied to one title or console.
 
-This means the application is not limited to Kirby. Any legally obtained GBA
-game that works with the supported mGBA link-cable setup may be tested, subject
-to the game's own multiplayer requirements and compatibility.
+**What works today:** Game Boy Advance emulation powered by mGBA. Nintendo DS
+and PlayStation are future directions shown in the UI as **Planned**; their
+emulators and games are **not supported yet**.
 
-## Features
+| System | Status | What Luna currently offers |
+| --- | --- | --- |
+| Game Boy Advance | Available | Solo play and 2–4 player rooms for compatible GBA link-cable games |
+| Nintendo DS | Planned | No DS emulator or multiplayer support yet |
+| PlayStation | Planned | No PS1 emulator or multiplayer support yet |
 
-- 2–4 player rooms with six-digit join codes and invite links.
-- Host approval before a guest receives a player slot.
-- Two online modes: host streaming, or distributed same-ROM deterministic input sync.
-- Host-stream WebRTC video/audio routing and controller input transport.
-- Distributed mode keeps video and audio local and exchanges only frame-numbered input.
-- Desktop keyboard controls and mobile touch controls.
-- Local ROM caching so a previously loaded ROM can be selected again on the
-  same device.
-- Optional account-backed game metadata and cloud save files; ROM files stay
-  on the user's device.
-- GitHub Pages deployment at `https://rcguen.github.io/luna/`.
+Luna's library and play screens are intended to accommodate more systems over
+time. Each new console will need its own emulator integration, controls, save
+handling, and compatibility testing. The planned cards are not playable
+features or a release-date promise.
 
-## Supported game requirements
+## Play with your own games
 
-The game must be a GBA title with a multiplayer or link-cable mode that is
-compatible with the linked mGBA instances. Single-player games can still be
-used in solo mode, but they will not gain multiplayer functionality.
+- Load a legally obtained GBA ROM from your device. Luna does not bundle ROMs
+  or a BIOS.
+- Previously loaded ROMs can be cached in the same browser, so you need not
+  choose the file on every visit. An account can keep game metadata and cloud
+  saves; ROM files remain on your device and do not sync through the account.
+- Play solo, or create a room with a six-digit code and invite link. The host
+  approves guests before they receive a player slot.
+- Use a keyboard on desktop or touch controls on mobile. The game layout
+  adapts to portrait and landscape screens.
 
-For host streaming, the host supplies the legally obtained ROM and runs all
-linked emulator instances; guests do not need a copy. For distributed mode,
-every participant must load the exact same ROM locally. Luna verifies the
-SHA-256 ROM hash before approval and does not upload ROM bytes.
-Do not upload or commit ROMs, BIOS files, save data, or other copyrighted game
-assets to this repository.
+Luna is not limited to Kirby: any legally obtained GBA title can be tried.
+Multiplayer requires that the game itself support a compatible link-cable
+mode. A game working in solo mode does not imply its multiplayer mode works.
 
 ## Development
 
@@ -44,10 +42,11 @@ npm install
 npm run dev
 ```
 
-Open the Vite URL in a browser. On the host device, load a legal `.gba` ROM,
-choose 2, 3, or 4 players, and create a room. Share the generated invite link
-or six-digit room code. Each guest joins, waits for host approval, and uses the
-touch controls or keyboard mapping available on their device.
+Open the Vite URL in a browser and load a legal `.gba` ROM for solo play. To
+play together, choose 2, 3, or 4 players and create a room. Share the generated
+invite link or six-digit code. For host streaming, only the host needs the ROM;
+for distributed mode, every player needs the exact same ROM. Guests wait for
+host approval before playing.
 
 Run the production checks with:
 
@@ -63,7 +62,7 @@ The GitHub Pages workflow builds the Vite app and publishes `dist/` at
 currently configures public STUN servers but has no TURN service, so some
 restrictive NAT or firewall combinations may not connect until TURN is added.
 
-## Online architectures and limitations
+## Current GBA multiplayer modes and limitations
 
 Host streaming remains available: the host runs all linked GBA instances and
 streams each player's video/audio to that player's guest. This keeps guests
@@ -87,9 +86,9 @@ preferably with the guest using a separate mobile network or hotspot. In
 distributed mode both devices must load the same legal ROM, choose the same
 player count, create/join the distributed room, and wait for approval.
 
-## Testing policy
+## Testing and rights
 
-No ROM, BIOS, save data, or copyrighted game asset is included. Kirby & The
-Amazing Mirror, or any other game, must be tested only with a ROM supplied by
-the user. A UI-only or engine smoke test is not evidence that a particular
-game's multiplayer mode works.
+No ROM, BIOS, save data, or copyrighted game asset is included. Bring your own
+legally obtained games. A UI-only or engine smoke test is not evidence that a
+particular game's multiplayer mode works, and the planned DS/PS1 systems have
+not been implemented or tested.
