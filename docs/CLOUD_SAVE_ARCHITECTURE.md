@@ -22,12 +22,35 @@ The database check constraint and Storage policies validate the user prefix and
 path shape. Upload uses `application/octet-stream`, `upsert: false`, and a
 64 MiB limit. Downloads require Storage SELECT; deletes require DELETE.
 
-## Reliability limits
+## Local-first battery saves
 
-The IndexedDB queue retries failed uploads after an online transition. Revision
-selection is currently client-side and is not an atomic cross-device operation.
-The next safe improvement is a Postgres RPC that reserves a revision and writes
-metadata in one transaction, with orphan-object cleanup after failed inserts.
+Battery progress is saved independently of Supabase in the
+`luna-local-battery` IndexedDB database. The key combines the ROM SHA-256,
+player identity, battery-save kind, and format version. Each atomic write keeps
+the previous checksum-verified image as a recovery backup. Luna restores the
+save before the first emulated frame and autosaves every 15 seconds, when the
+page is hidden, and on an explicit game/session exit.
 
-The current WASM bridge supports save states only. Battery SRAM synchronization,
-automatic restore, and multiplayer snapshot coordination remain unsupported.
+The WASM bridge uses mGBA's `savedataClone` and `savedataRestore` APIs and
+preserves the real SRAM, Flash, or EEPROM size. Save states are a separate
+format and are intentionally not presented as battery saves.
+
+## Cloud synchronization and reliability limits
+
+Authenticated Player 1 battery saves are uploaded only after the local
+IndexedDB commit succeeds. Downloads are rejected unless their byte length and
+SHA-256 match `save_files`. A metadata-insert failure triggers best-effort
+deletion of the newly uploaded object. Retryable failures are deduplicated in
+the IndexedDB queue and retried after an online transition.
+
+Revision selection is still client-side and therefore not an atomic
+cross-device operation. The client checks an expected revision and refuses to
+overwrite a newer revision, but two simultaneous first writers can still race.
+The production-grade follow-up is a Postgres RPC that atomically reserves the
+next revision before object upload.
+
+Host-streaming guests do not own a local emulator. Their battery saves remain
+explicitly disabled until an authenticated transfer protocol can bind each
+guest identity to its host-side native player index without sharing Supabase
+tokens. Player 1 maps to native index 0; the bridge itself correctly maps UI
+slots 1–4 to native indexes 0–3.

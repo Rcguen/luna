@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import { GbaEngine, type EngineDiagnostics, type EngineFrame } from './engine/wasmAdapter';
+import { GbaEngine, type BatteryTechnology, type EngineDiagnostics, type EngineFrame } from './engine/wasmAdapter';
 import { type Diagnostics, type PlayerSlot } from './netplay/peerSession';
 import { MultiPeerSession, type MultiGuestRequest } from './netplay/multiPeerSession';
 import { DistributedPeerSession, type DistributedInput } from './netplay/distributedPeerSession';
 import { TouchControls } from './components/TouchControls';
 import { HomeView, type OnlineMode } from './components/HomeView';
-import { listGames, registerGame, type GameRecord } from './lib/cloudSaves';
+import { downloadSave, latestSave, listGames, registerGame, SaveConflictError, uploadSave, type GameRecord } from './lib/cloudSaves';
 import { cacheRom, getCachedRom, hashRom } from './lib/localRoms';
+import { batterySize, getLocalBattery, localPlayerId, putLocalBattery, setCloudRevision } from './lib/localBatterySaves';
 import type { Session } from '@supabase/supabase-js';
 import type { AudioMessage, FrameMessage } from './netplay/protocol';
 import './styles.css';
@@ -23,6 +24,14 @@ function resetAudioClock() {
 const lastGameKey = (userId: string) => `luna:last-game:${userId}`;
 
 function formatCode(code: string) { return code ? `${code.slice(0, 3)} ${code.slice(3)}` : '------'; }
+
+function resolveBatteryTechnology(engine: GbaEngine, player: number, bytes: ArrayBuffer): BatteryTechnology {
+  const candidates = ([1, 2, 3, 4, 5, 6] as BatteryTechnology[]).filter((technology) => batterySize(technology) === bytes.byteLength);
+  const detected = engine.batteryType(player) as BatteryTechnology;
+  if (candidates.includes(detected)) return detected;
+  if (candidates.length === 1) return candidates[0];
+  throw new Error('This 64 KiB save is ambiguous between Flash and SRAM. Import it manually and choose the correct technology.');
+}
 
 async function toggleFullscreen() {
   try {
@@ -74,7 +83,12 @@ export default function App() {
   const [guestHasVideo, setGuestHasVideo] = useState(false);
   const [streamQuality, setStreamQuality] = useState<StreamQuality>('auto');
   const [hostPanelOpen, setHostPanelOpen] = useState(false);
+  const [saveStatus, setSaveStatus] = useState('Battery saves stay on this device.');
   const engineRef = useRef<GbaEngine | null>(null);
+  const activeSaveRef = useRef<{ engine: GbaEngine; romHash: string; ownerId: string } | null>(null);
+  const cloudSaveRef = useRef<{ userId: string; gameId: string; romHash: string } | null>(null);
+  const saveWriteRef = useRef<Promise<void>>(Promise.resolve());
+  const lastSavedRevision = useRef(0);
   const romBytesRef = useRef<Uint8Array | null>(null);
   const sessionRef = useRef<MultiPeerSession | null>(null);
   const distributedSessionRef = useRef<DistributedPeerSession | null>(null);
@@ -112,6 +126,88 @@ export default function App() {
     setEngineStatus(engine.diagnostics());
     return engine;
   };
+
+  const restoreLocalBattery = async (engine: GbaEngine, bytes: Uint8Array) => {
+    if (!engine.supportsBatterySave()) throw new Error('This WASM build cannot persist battery saves. The game was not started to protect your progress.');
+    const hash = await hashRom(bytes);
+    const ownerId = localPlayerId(session?.user.id || null);
+    let saved = await getLocalBattery(hash, ownerId);
+    let message = saved ? saved.recovered ? 'Restored the verified local backup; the newest save was damaged.' : 'Restored your local battery save.' : 'No previous battery save found. Progress will save locally.';
+    const cloud = session && currentGame?.rom_hash === hash ? { userId: session.user.id, gameId: currentGame.id } : null;
+    if (cloud) {
+      try {
+        const remote = await latestSave(cloud.userId, cloud.gameId, 1, 'battery');
+        if (remote && saved?.image.checksum === remote.checksum) {
+          await setCloudRevision(hash, ownerId, saved.save.revision, remote.revision);
+          saved.save.cloudRevision = remote.revision;
+          saved.save.cloudLocalRevision = saved.save.revision;
+        } else if (remote && !saved) {
+          const remoteBytes = await downloadSave(remote);
+          const technology = resolveBatteryTechnology(engine, 0, remoteBytes);
+          const local = await putLocalBattery(hash, ownerId, technology, remoteBytes);
+          await setCloudRevision(hash, ownerId, local.revision, remote.revision);
+          saved = { save: { ...local, cloudRevision: remote.revision, cloudLocalRevision: local.revision }, image: local.current, recovered: false };
+          message = 'Downloaded, verified, and restored your cloud battery save.';
+        } else if (remote && saved && remote.revision > saved.save.cloudRevision) {
+          if (saved.save.cloudLocalRevision === saved.save.revision) {
+            const remoteBytes = await downloadSave(remote);
+            const technology = resolveBatteryTechnology(engine, 0, remoteBytes);
+            const local = await putLocalBattery(hash, ownerId, technology, remoteBytes);
+            await setCloudRevision(hash, ownerId, local.revision, remote.revision);
+            saved = { save: { ...local, cloudRevision: remote.revision, cloudLocalRevision: local.revision }, image: local.current, recovered: false };
+            message = 'A newer verified cloud save replaced the previously synced local copy; the old local save remains as a backup.';
+          } else {
+            message = 'Local and cloud saves both changed. Luna kept the local save; export a backup before resolving the conflict.';
+          }
+        }
+      } catch (error) {
+        message = `${message} Cloud restore unavailable: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
+    if (saved) engine.importBattery(0, saved.image.technology, saved.image.bytes);
+    activeSaveRef.current = { engine, romHash: hash, ownerId };
+    lastSavedRevision.current = saved?.save.revision || 0;
+    setSaveStatus(message);
+  };
+
+  const persistLocalBattery = (): Promise<void> => {
+    const active = activeSaveRef.current;
+    if (!active) return Promise.resolve();
+    let image;
+    try { image = active.engine.exportBattery(0); }
+    catch (error) { setSaveStatus(`Local save failed: ${error instanceof Error ? error.message : String(error)}`); return Promise.reject(error); }
+    if (!image) return Promise.resolve(); // The game has not initialized SRAM/Flash/EEPROM.
+    const { romHash, ownerId } = active;
+    saveWriteRef.current = saveWriteRef.current.catch(() => undefined).then(async () => {
+      try {
+        const saved = await putLocalBattery(romHash, ownerId, image.technology, image.bytes);
+        if (activeSaveRef.current === active && saved.revision !== lastSavedRevision.current) {
+          lastSavedRevision.current = saved.revision;
+          setSaveStatus('Battery save stored on this device.');
+        }
+        const cloud = cloudSaveRef.current;
+        if (cloud?.romHash === romHash && saved.cloudLocalRevision !== saved.revision) {
+          try {
+            const uploaded = await uploadSave(cloud.userId, cloud.gameId, 1, 'battery', saved.current.bytes, { expectedRevision: saved.cloudRevision });
+            if (uploaded) {
+              await setCloudRevision(romHash, ownerId, saved.revision, uploaded.revision);
+              if (activeSaveRef.current === active) setSaveStatus('Battery save stored locally and synced to cloud.');
+            } else if (activeSaveRef.current === active) setSaveStatus('Battery save stored locally; cloud sync is queued.');
+          } catch (error) {
+            if (activeSaveRef.current === active) setSaveStatus(error instanceof SaveConflictError ? error.message : `Battery save is safe locally; cloud sync failed: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+      } catch (error) {
+        setSaveStatus(`Local save failed: ${error instanceof Error ? error.message : String(error)}`);
+        throw error;
+      }
+    });
+    return saveWriteRef.current;
+  };
+
+  useEffect(() => {
+    cloudSaveRef.current = session && currentGame ? { userId: session.user.id, gameId: currentGame.id, romHash: currentGame.rom_hash } : null;
+  }, [session, currentGame]);
 
   const ensureAudio = async () => {
     if (!audioContext.current) {
@@ -218,6 +314,7 @@ export default function App() {
       setStatus('Starting the linked host engine…');
       const engine = await newEngine(roomCapacity);
       if (romBytesRef.current) engine.loadRom(romBytesRef.current);
+      await restoreLocalBattery(engine, romBytesRef.current);
       const session = new MultiPeerSession(makeEvents(true));
       sessionRef.current = session;
       await ensureAudio();
@@ -260,6 +357,7 @@ export default function App() {
       await ensureAudio();
       const engine = await newEngine(1);
       engine.loadRom(romBytesRef.current);
+      await restoreLocalBattery(engine, romBytesRef.current);
       setRomLoaded(true); setGameStarted(true); setScreen('solo'); setStatus('Solo game running.');
     } catch (error) { engineRef.current?.fail(error); setEngineStatus(engineRef.current?.diagnostics() || EMPTY_ENGINE); setStatus(`Failed to start solo emulator: ${error instanceof Error ? error.message : String(error)}`); }
   };
@@ -308,6 +406,7 @@ export default function App() {
   };
 
   const loadRom = async (file: File) => {
+    if (screen !== 'home') { setStatus('End the current session before changing ROMs so its save can be flushed safely.'); return; }
     setRomLoading(true);
     setStatus(`Loading ${file.name}…`);
     try {
@@ -508,12 +607,20 @@ export default function App() {
 
   useEffect(() => () => { sessionRef.current?.close(); distributedSessionRef.current?.close(); engineRef.current?.stop(); }, []);
 
+  useEffect(() => {
+    if (screen !== 'solo' && screen !== 'host') return;
+    const timer = window.setInterval(() => { void persistLocalBattery().catch(() => undefined); }, 15000);
+    const onVisibility = () => { if (document.visibilityState === 'hidden') void persistLocalBattery().catch(() => undefined); };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', onVisibility); };
+  }, [screen]);
+
   const startGame = () => { if (!romLoaded) { setStatus('Load your legal ROM before starting.'); return; } setGameStarted(true); setStatus(Object.values(playerStates).slice(1, roomCapacity).some((state) => state !== 'connected') ? 'Game running; waiting for remaining guest seats.' : 'Game started.'); };
-  const leave = () => { sessionRef.current?.close(); distributedSessionRef.current?.close(); engineRef.current?.stop(); resetAudioClock(); sessionRef.current = null; distributedSessionRef.current = null; engineRef.current = null; romBytesRef.current = null; guestPendingFrame.current = null; distributedInputs.current.clear(); distributedStarted.current = false; distributedAssignedSlot.current = null; setEngineStatus(EMPTY_ENGINE); setRomLoaded(false); setRomLoading(false); setGameStarted(false); setPendingGuest(null); setApproved(false); setAssignedSlot(null); setGuestHasVideo(false); setHostPanelOpen(false); setScreen('home'); setStatus(`Ready for a ${roomCapacity}-player session.`); };
+  const leave = async () => { try { await persistLocalBattery(); } catch { setStatus('Could not store the battery save. The emulator is still open; retry Exit after freeing browser storage.'); return; } sessionRef.current?.close(); distributedSessionRef.current?.close(); engineRef.current?.stop(); activeSaveRef.current = null; resetAudioClock(); sessionRef.current = null; distributedSessionRef.current = null; engineRef.current = null; romBytesRef.current = null; guestPendingFrame.current = null; distributedInputs.current.clear(); distributedStarted.current = false; distributedAssignedSlot.current = null; setEngineStatus(EMPTY_ENGINE); setRomLoaded(false); setRomLoading(false); setGameStarted(false); setPendingGuest(null); setApproved(false); setAssignedSlot(null); setGuestHasVideo(false); setHostPanelOpen(false); setScreen('home'); setStatus(`Ready for a ${roomCapacity}-player session.`); };
   const inviteLink = roomCode ? `${window.location.origin}${window.location.pathname}?room=${roomCode}${screen.startsWith('distributed') ? `&mode=distributed&players=${roomCapacity}` : ''}` : '';
   const copyInvite = async () => { if (!inviteLink) return; await navigator.clipboard?.writeText(inviteLink); setStatus('Invite link copied.'); };
 
-  if (screen === 'solo') return <GameShell role="solo" title="Solo game" subtitle={romName} canvasRef={hostCanvas} local badge="SOLO"><EngineStatusPanel status={engineStatus} /><TouchControls onKeys={(keys) => engineRef.current?.setKeys(0, keys)} /><button className="secondary" onClick={leave}>Exit game</button></GameShell>;
+  if (screen === 'solo') return <GameShell role="solo" title="Solo game" subtitle={romName} canvasRef={hostCanvas} local badge="SOLO"><EngineStatusPanel status={engineStatus} /><p className="status" role="status">{saveStatus}</p><TouchControls onKeys={(keys) => engineRef.current?.setKeys(0, keys)} /><button className="secondary" onClick={() => void leave()}>Exit game</button></GameShell>;
 
   if (screen === 'host') return <GameShell role="host" title="Host room" subtitle={`${roomCapacity}-player room · ${formatCode(roomCode)}`} canvasRef={hostCanvas} local>
     <button className="host-tools-toggle" type="button" aria-expanded={hostPanelOpen} onClick={() => setHostPanelOpen((open) => !open)}>{hostPanelOpen ? 'Close' : 'Room'}</button>
@@ -521,9 +628,9 @@ export default function App() {
       <div className="room-code">{formatCode(roomCode)}</div><p className="muted">Share this code or the invite link. The guest still needs your approval.</p><div className="invite-row"><input aria-label="Invite link" readOnly value={inviteLink} /><button className="secondary" onClick={() => void copyInvite()}>Copy invite</button></div>
       {pendingGuest && <div className="approval"><strong>Guest requests Player {pendingGuest.slot}</strong><div><button onClick={() => { pendingGuest.approve(); setPendingGuest(null); }}>Approve</button><button className="secondary" onClick={() => { pendingGuest.reject(); setPendingGuest(null); }}>Reject</button></div></div>}
       <div className="lobby">{Array.from({ length: roomCapacity }, (_, index) => index + 1).map((slot) => <div key={slot}><span>Player {slot}{slot === 1 ? ' · Host' : ''}</span><strong>{playerStates[slot]}</strong></div>)}</div>
-      <StatusPanel diagnostics={diagnostics} status={status} /><EngineStatusPanel status={engineStatus} /><label className="quality-control">Stream quality<select value={streamQuality} onChange={(e) => setStreamQuality(e.target.value as StreamQuality)}><option value="auto">Auto</option><option value="smooth">Smooth · lower latency</option><option value="balanced">Balanced</option><option value="sharp">Sharp · higher quality</option></select></label><label className="file-button">{romLoaded ? `Change ROM (${romName})` : 'Load your legal ROM'}<input type="file" accept=".gba,.gb,.gbc" onChange={(e) => e.target.files?.[0] && loadRom(e.target.files[0])} /></label><button onClick={startGame} disabled={gameStarted}>{gameStarted ? 'Game running' : 'Start game'}</button>
+      <StatusPanel diagnostics={diagnostics} status={status} /><EngineStatusPanel status={engineStatus} /><p className="status" role="status">{saveStatus} Guest battery saves are not enabled in host-streaming mode.</p><label className="quality-control">Stream quality<select value={streamQuality} onChange={(e) => setStreamQuality(e.target.value as StreamQuality)}><option value="auto">Auto</option><option value="smooth">Smooth · lower latency</option><option value="balanced">Balanced</option><option value="sharp">Sharp · higher quality</option></select></label><label className="file-button">{romLoaded ? `Change ROM (${romName})` : 'Load your legal ROM'}<input type="file" accept=".gba,.gb,.gbc" onChange={(e) => e.target.files?.[0] && loadRom(e.target.files[0])} /></label><button onClick={startGame} disabled={gameStarted}>{gameStarted ? 'Game running' : 'Start game'}</button>
     </div>
-    <TouchControls onKeys={(keys) => engineRef.current?.setKeys(0, keys)} /><button className="secondary" onClick={leave}>End session</button>
+    <TouchControls onKeys={(keys) => engineRef.current?.setKeys(0, keys)} /><button className="secondary" onClick={() => void leave()}>End session</button>
   </GameShell>;
 
   if (screen === 'distributed-host') return <GameShell role="host" title="Distributed room" subtitle={`${roomCapacity}-player room · ${formatCode(roomCode)}`} canvasRef={hostCanvas} local badge="HOST">
@@ -532,7 +639,7 @@ export default function App() {
       <div className="room-code">{formatCode(roomCode)}</div><p className="muted">Share this code or invite link. Every player must load the exact same ROM locally.</p><div className="invite-row"><input aria-label="Distributed invite link" readOnly value={inviteLink} /><button className="secondary" onClick={() => void copyInvite()}>Copy invite</button></div>
       {pendingGuest && <div className="approval"><strong>Guest requests Player {pendingGuest.slot}</strong><div><button onClick={() => { pendingGuest.approve(); setPendingGuest(null); }}>Approve</button><button className="secondary" onClick={() => { pendingGuest.reject(); setPendingGuest(null); }}>Reject</button></div></div>}
       <div className="lobby">{Array.from({ length: roomCapacity }, (_, index) => index + 1).map((slot) => <div key={slot}><span>Player {slot}{slot === 1 ? ' · Host' : ''}</span><strong>{playerStates[slot]}</strong></div>)}</div>
-      <StatusPanel diagnostics={diagnostics} status={status} /><EngineStatusPanel status={engineStatus} /><p className="muted">Distributed mode exchanges only frame-numbered inputs. Video, audio, ROM bytes, and saves stay local.</p>
+      <StatusPanel diagnostics={diagnostics} status={status} /><EngineStatusPanel status={engineStatus} /><p className="muted">Distributed mode exchanges only frame-numbered inputs. Video, audio, and ROM bytes stay local. Automatic battery persistence for distributed sessions is not enabled yet.</p>
     </div>
     <TouchControls onKeys={(keys) => { guestKeys.current = keys; }} /><button className="secondary" onClick={leave}>End session</button>
   </GameShell>;

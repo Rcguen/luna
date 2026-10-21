@@ -9,6 +9,8 @@ export type EngineAudio = {
   samples: Int16Array;
 };
 
+export type BatteryTechnology = 1 | 2 | 3 | 4 | 5 | 6;
+
 export type EngineDiagnostics = {
   wasm: 'idle' | 'loaded' | 'failed';
   emulator: 'idle' | 'created' | 'running' | 'stopped' | 'failed';
@@ -40,6 +42,10 @@ type WasmModule = {
   _mgs_save_state(player: number): number;
   _mgs_state_ptr(): number;
   _mgs_load_state_bytes(player: number, ptr: number, size: number): number;
+  _mgs_battery_type?(player: number): number;
+  _mgs_battery_export?(player: number): number;
+  _mgs_battery_ptr?(): number;
+  _mgs_battery_import?(player: number, ptr: number, size: number, type: number): number;
   _mgs_reset_sio?(): void;
   _mgs_quit(): void;
 };
@@ -135,6 +141,40 @@ export class GbaEngine {
   setKeys(player: number, keys: number): void { this.requireModule()._mgs_set_keys(player, keys >>> 0); }
 
   supportsStateSave(): boolean { return Boolean(this.module?._mgs_save_state && this.module?._mgs_load_state_bytes); }
+
+  supportsBatterySave(): boolean {
+    const module = this.module;
+    return Boolean(module?._mgs_battery_type && module?._mgs_battery_export && module?._mgs_battery_ptr && module?._mgs_battery_import);
+  }
+
+  batteryType(player: number): number {
+    const module = this.requireModule();
+    if (!this.supportsBatterySave()) throw new Error('This WASM build does not support battery saves. Update the emulator before playing.');
+    return module._mgs_battery_type!(player);
+  }
+
+  exportBattery(player: number): { technology: BatteryTechnology; bytes: ArrayBuffer } | null {
+    const module = this.requireModule();
+    const technology = this.batteryType(player);
+    if (technology < 1 || technology > 6) return null; // Save type not yet detected.
+    const size = module._mgs_battery_export!(player);
+    const ptr = module._mgs_battery_ptr!();
+    if (!size || !ptr) throw new Error('Could not read battery data from the emulator.');
+    return { technology: technology as BatteryTechnology, bytes: module.HEAPU8.slice(ptr, ptr + size).buffer };
+  }
+
+  importBattery(player: number, technology: BatteryTechnology, bytes: ArrayBuffer): void {
+    const module = this.requireModule();
+    if (!this.supportsBatterySave()) throw new Error('This WASM build does not support battery saves.');
+    if (!bytes.byteLength || bytes.byteLength > 131072) throw new Error('Invalid battery-save size.');
+    const ptr = module._malloc(bytes.byteLength);
+    if (!ptr) throw new Error('Could not allocate battery-save memory.');
+    try {
+      module.HEAPU8.set(new Uint8Array(bytes), ptr);
+      const result = module._mgs_battery_import!(player, ptr, bytes.byteLength, technology);
+      if (result !== 0) throw new Error(`The emulator rejected the battery save (code ${result}).`);
+    } finally { module._free(ptr); }
+  }
 
   exportState(player: number): ArrayBuffer {
     const module = this.requireModule(); const size = module._mgs_save_state(player); const ptr = module._mgs_state_ptr();

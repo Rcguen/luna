@@ -55,14 +55,22 @@ access from `anon`/`PUBLIC`, and recreates only the named Luna policies. Review
 any custom policies on these tables before running the script, because
 PostgreSQL policies are otherwise additive.
 
-## Current emulator limitation
+## Battery-save behavior
 
-The current generated WASM bridge exposes save-state export/import, and the
-web app includes an adapter for that capability. It does **not** expose mGBA
-battery SRAM import/export APIs. Battery-save upload/restore therefore remains
-explicitly unavailable until the WASM bridge is rebuilt with a real battery
-save API; the UI does not pretend that this is supported.
+The generated WASM bridge exposes real mGBA battery-save import/export for
+SRAM, Flash, and EEPROM. Luna commits battery progress to IndexedDB first; an
+account and Supabase are not required for local restore. When signed in, Luna
+then uploads a private Player 1 backup with
+`content-type: application/octet-stream`, verifies SHA-256 on download, and
+refuses a stale expected revision instead of silently overwriting it.
 
-The library currently provides manual upload/download/delete for supported
-save files. Automatic restore and periodic in-game synchronization should be
-added only after the emulator's battery API and save semantics are available.
+The library's **Import .sav** action validates the exact technology/size,
+confirms replacement, and retains the previous local image as a backup.
+**Export current .sav** exports the latest local gameplay save. Items under
+**Cloud backup history** are labelled backups and are checksum-verified before
+download. Save-state import/export is still intentionally shown as not
+connected.
+
+Host-streaming guest battery saves remain disabled. The host must never receive
+a guest's Supabase token; completing this feature requires a separate
+authenticated save-transfer protocol.
