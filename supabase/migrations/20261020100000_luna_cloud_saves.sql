@@ -39,6 +39,7 @@ create table if not exists public.save_files (
   file_size bigint not null check (file_size > 0 and file_size <= 67108864),
   checksum text not null check (checksum ~ '^[0-9a-f]{64}$'),
   revision bigint not null check (revision > 0),
+  pinned boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint save_files_storage_path_check check (
@@ -199,6 +200,12 @@ alter table public.save_files
 
 create index if not exists save_files_latest_idx
   on public.save_files(user_id, game_id, player_slot, save_type, revision desc);
+
+alter table public.save_files
+  add column if not exists pinned boolean not null default false;
+
+create index if not exists save_files_retention_idx
+  on public.save_files(user_id, game_id, player_slot, save_type, pinned, revision desc);
 
 revoke all on table public.games from public, anon;
 revoke all on table public.play_sessions from public, anon;

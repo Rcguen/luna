@@ -2,7 +2,7 @@ import { enqueueSave, listPendingSaves, removePendingSave } from './localSaveQue
 import { supabase } from './supabase';
 
 export type GameRecord = { id: string; user_id: string; rom_hash: string; title: string; imported_at: string; last_played_at: string | null };
-export type SaveRecord = { id: string; user_id: string; game_id: string; player_slot: number; save_type: 'battery' | 'state'; storage_path: string; file_size: number; checksum: string; revision: number; updated_at: string };
+export type SaveRecord = { id: string; user_id: string; game_id: string; player_slot: number; save_type: 'battery' | 'state'; storage_path: string; file_size: number; checksum: string; revision: number; updated_at: string; created_at?: string; pinned?: boolean };
 export type UploadOptions = { expectedRevision?: number; queueOnFailure?: boolean };
 
 export class SaveConflictError extends Error {
@@ -29,6 +29,12 @@ export async function listSaves(userId: string, gameId: string): Promise<SaveRec
   if (error) throw error; return (data || []) as SaveRecord[];
 }
 
+export async function setSavePinned(record: SaveRecord, pinned: boolean): Promise<SaveRecord> {
+  const { data, error } = await requireClient().from('save_files').update({ pinned }).eq('id', record.id).eq('user_id', record.user_id).select().single();
+  if (error) throw error;
+  return data as SaveRecord;
+}
+
 export async function latestSave(userId: string, gameId: string, playerSlot: number, saveType: 'battery' | 'state'): Promise<SaveRecord | null> {
   const { data, error } = await requireClient().from('save_files').select('*').match({ user_id: userId, game_id: gameId, player_slot: playerSlot, save_type: saveType }).order('revision', { ascending: false }).limit(1).maybeSingle();
   if (error) throw error;
@@ -53,7 +59,15 @@ async function uploadOnce(userId: string, gameId: string, playerSlot: number, sa
   const { error: uploadError } = await client.storage.from('luna-saves').upload(storagePath, bytes, { contentType: 'application/octet-stream', upsert: false });
   if (uploadError) throw uploadError;
   const { data, error } = await client.from('save_files').insert({ user_id: userId, game_id: gameId, player_slot: playerSlot, save_type: saveType, storage_path: storagePath, file_size: bytes.byteLength, checksum, revision }).select().single();
-  if (!error) return data as SaveRecord;
+  if (!error) {
+    const saved = data as SaveRecord;
+    // Retention runs only after a successful metadata insert. Existing rows
+    // are untouched until the next successful cloud save, so rollout is safe.
+    await pruneSaveBackups(userId, gameId, playerSlot, saveType, 10).catch((cleanupError) => {
+      console.warn('Cloud save retention cleanup deferred:', cleanupError);
+    });
+    return saved;
+  }
   const { error: cleanupError } = await client.storage.from('luna-saves').remove([storagePath]);
   if (cleanupError) throw new Error(`Save metadata failed and the uploaded orphan could not be removed: ${cleanupError.message}`);
   throw error;
@@ -98,10 +112,39 @@ export async function downloadSave(record: SaveRecord): Promise<ArrayBuffer> {
   return bytes;
 }
 
+export function selectRetentionCandidates(records: SaveRecord[], keep = 10): SaveRecord[] {
+  const ordered = records.slice().sort((a, b) => b.revision - a.revision);
+  if (ordered.length <= keep) return [];
+  const protectedIds = new Set(ordered.slice(0, keep).map((record) => record.id));
+  for (const record of ordered) if (record.pinned) protectedIds.add(record.id);
+  return ordered.slice().reverse().filter((record) => !protectedIds.has(record.id));
+}
+
+/** Keep the newest ten verified backups, plus every manually pinned backup.
+ * The newest record is always protected. A candidate is downloaded and
+ * checksum-verified before deletion; failed verification leaves it intact. */
+export async function pruneSaveBackups(userId: string, gameId: string, playerSlot: number, saveType: 'battery' | 'state', keep = 10): Promise<number> {
+  const records = (await listSaves(userId, gameId)).filter((record) => record.player_slot === playerSlot && record.save_type === saveType).sort((a, b) => b.revision - a.revision);
+  const candidates = selectRetentionCandidates(records, keep);
+  let removed = 0;
+  for (const record of candidates) {
+    try {
+      await downloadSave(record);
+      await deleteSave(record);
+      removed += 1;
+    } catch (error) {
+      console.warn(`Cloud backup ${record.revision} was retained because cleanup verification failed:`, error);
+    }
+  }
+  return removed;
+}
+
 export async function deleteSave(record: SaveRecord): Promise<void> {
   const client = requireClient();
+  const current = await latestSave(record.user_id, record.game_id, record.player_slot, record.save_type);
+  if (current?.id === record.id) throw new Error('The current cloud save is protected. Create a newer backup before deleting this one.');
   const { error: storageError } = await client.storage.from('luna-saves').remove([record.storage_path]);
   if (storageError) throw storageError;
   const { error } = await client.from('save_files').delete().eq('id', record.id).eq('user_id', record.user_id);
-  if (error) throw error;
+  if (error) throw new Error(`Storage object removed, but save metadata cleanup failed and will need retry: ${error.message}`);
 }

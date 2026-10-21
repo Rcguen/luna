@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { BatteryTechnology } from '../engine/wasmAdapter';
-import type { GameRecord, SaveRecord } from '../lib/cloudSaves';
-import { deleteSave, downloadSave, latestSave, listGames, listSaves, uploadSave } from '../lib/cloudSaves';
+import type { GameRecord } from '../lib/cloudSaves';
+import { deleteSave, downloadSave, latestSave, listGames, listSaves, setSavePinned, uploadSave, type SaveRecord } from '../lib/cloudSaves';
 import { batterySize, getLocalBatteryForUser, localPlayerId, putLocalBattery, setCloudRevision } from '../lib/localBatterySaves';
 import { ChoiceMenu } from './ChoiceMenu';
 
@@ -34,6 +34,13 @@ export function GameLibrary({ userId, refreshKey = 0, onLoadGame }: { userId: st
     download(local.saved.image.bytes, `${safeName(game.title)}.sav`);
   };
   const downloadCloudBackup = async (save: SaveRecord) => download(await downloadSave(save), `${save.save_type}-player-${save.player_slot}-r${save.revision}.bin`);
+  const restoreCloudBackup = async (game: GameRecord, save: SaveRecord, technology: BatteryTechnology) => {
+    if (!window.confirm(`Restore cloud backup revision ${save.revision}? The current local battery save will be kept as its one-step backup.`)) return;
+    const bytes = await downloadSave(save);
+    if (bytes.byteLength !== batterySize(technology)) throw new Error('Choose the battery technology that matches this cloud backup before restoring it.');
+    await putLocalBattery(game.rom_hash, localPlayerId(userId), technology, bytes);
+    setMessage(`Revision ${save.revision} restored locally. Restart the game to apply it.`);
+  };
   const importBattery = async (game: GameRecord, file: File, technology: BatteryTechnology) => {
     const bytes = await file.arrayBuffer();
     if (bytes.byteLength !== batterySize(technology)) throw new Error(`This file is ${bytes.byteLength} bytes; the selected save technology requires ${batterySize(technology)} bytes.`);
@@ -53,16 +60,22 @@ export function GameLibrary({ userId, refreshKey = 0, onLoadGame }: { userId: st
   };
 
   const run = async (operation: () => Promise<void>) => { try { await operation(); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } };
-  return <section className="library"><div className="library-heading"><div><p className="eyebrow">YOUR CLOUD LIBRARY</p><h2>My Games</h2></div><span className="muted">ROM stays on your device</span></div>{games.length === 0 ? <p className="muted">No imported games yet. Load a local ROM while signed in.</p> : games.map((game) => <GameRow key={game.id} game={game} onLoad={() => onLoadGame(game)} onExportCurrent={() => run(() => exportCurrent(game))} onDownloadCloud={(save) => run(() => downloadCloudBackup(save))} onDelete={async (save) => { try { await deleteSave(save); setMessage('Cloud backup deleted.'); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); throw error; } }} onImport={(file, technology) => importBattery(game, file, technology)} saving={saving} />)}{message && <p className="status" role="status">{message}</p>}</section>;
+  return <section className="library"><div className="library-heading"><div><p className="eyebrow">YOUR CLOUD LIBRARY</p><h2>My Games</h2></div><span className="muted">ROM stays on your device</span></div>{games.length === 0 ? <p className="muted">No imported games yet. Load a local ROM while signed in.</p> : games.map((game) => <GameRow key={game.id} game={game} onLoad={() => onLoadGame(game)} onExportCurrent={() => run(() => exportCurrent(game))} onDownloadCloud={(save) => run(() => downloadCloudBackup(save))} onRestoreCloud={(save, technology) => run(() => restoreCloudBackup(game, save, technology))} onPin={async (save, pinned) => run(async () => { await setSavePinned(save, pinned); setMessage(pinned ? 'Backup pinned and protected from retention.' : 'Backup unpinned.'); })} onDelete={async (save) => { if (!window.confirm(`Delete cloud backup revision ${save.revision}? This removes the verified file and its metadata.`)) return; try { await deleteSave(save); setMessage('Cloud backup deleted.'); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); throw error; } }} onImport={(file, technology) => importBattery(game, file, technology)} saving={saving} />)}{message && <p className="status" role="status">{message}</p>}</section>;
 }
 
-function GameRow({ game, onLoad, onExportCurrent, onDownloadCloud, onDelete, onImport, saving }: { game: GameRecord; onLoad: () => Promise<void>; onExportCurrent: () => Promise<void>; onDownloadCloud: (save: SaveRecord) => Promise<void>; onDelete: (save: SaveRecord) => Promise<void>; onImport: (file: File, technology: BatteryTechnology) => Promise<void>; saving: boolean }) {
+function GameRow({ game, onLoad, onExportCurrent, onDownloadCloud, onRestoreCloud, onPin, onDelete, onImport, saving }: { game: GameRecord; onLoad: () => Promise<void>; onExportCurrent: () => Promise<void>; onDownloadCloud: (save: SaveRecord) => Promise<void>; onRestoreCloud: (save: SaveRecord, technology: BatteryTechnology) => Promise<void>; onPin: (save: SaveRecord, pinned: boolean) => Promise<void>; onDelete: (save: SaveRecord) => Promise<void>; onImport: (file: File, technology: BatteryTechnology) => Promise<void>; saving: boolean }) {
   const [saves, setSaves] = useState<SaveRecord[]>([]);
   const [type, setType] = useState<'battery' | 'state'>('battery');
   const [technology, setTechnology] = useState<BatteryTechnology>(3);
+  const [page, setPage] = useState(0);
+  const pageSize = 5;
   const reload = () => listSaves(game.user_id, game.id).then(setSaves).catch(() => undefined);
 
   useEffect(() => { void reload(); }, [game.user_id, game.id]);
+  useEffect(() => { setPage(0); }, [saves.length]);
+  const pageCount = Math.max(1, Math.ceil(saves.length / pageSize));
+  const visibleSaves = saves.slice(page * pageSize, (page + 1) * pageSize);
+  const totalBytes = saves.reduce((total, save) => total + save.file_size, 0);
 
   return <article className="game-row">
     <div className="game-row-heading">
@@ -78,12 +91,16 @@ function GameRow({ game, onLoad, onExportCurrent, onDownloadCloud, onDelete, onI
       </> : <p className="muted">Save-state import/export is not connected yet. Battery saves are independent and safe to use.</p>}
     </div>
     {saves.length > 0 && <details className="save-history">
-      <summary>Cloud backup history ({saves.length})</summary>
-      <ul className="save-list">{saves.map((save) => <li key={save.id}>
-        <span>{save.save_type} · P{save.player_slot} · revision {save.revision}</span>
-        <button className="link-button" onClick={() => void onDownloadCloud(save)}>Download backup</button>
-        <button className="link-button danger" onClick={() => void onDelete(save).then(reload).catch(() => undefined)}>Delete cloud copy</button>
+      <summary>Cloud backups ({saves.length}) · {(totalBytes / 1024).toFixed(1)} KiB</summary>
+      <p className="muted save-history-note">Newest backups are retained automatically. Pinned backups are protected.</p>
+      <ul className="save-list">{visibleSaves.map((save) => <li key={save.id}>
+        <span>{save.save_type} · P{save.player_slot} · revision {save.revision} · {new Date(save.created_at || save.updated_at).toLocaleString()} · {(save.file_size / 1024).toFixed(1)} KiB{save.pinned ? ' · pinned' : ''}</span>
+        <button className="link-button" onClick={() => void onDownloadCloud(save)}>Download</button>
+        <button className="link-button" onClick={() => void onRestoreCloud(save, technology)}>Restore</button>
+        <button className="link-button" onClick={() => void onPin(save, !save.pinned)}>{save.pinned ? 'Unpin' : 'Pin'}</button>
+        <button className="link-button danger" disabled={save.revision === saves[0]?.revision} title={save.revision === saves[0]?.revision ? 'The current save is protected' : undefined} onClick={() => void onDelete(save).then(reload).catch(() => undefined)}>{save.revision === saves[0]?.revision ? 'Current' : 'Delete'}</button>
       </li>)}</ul>
+      {pageCount > 1 && <div className="save-history-pages"><button className="link-button" disabled={page === 0} onClick={() => setPage((value) => Math.max(0, value - 1))}>Previous</button><span>Page {page + 1} / {pageCount}</span><button className="link-button" disabled={page + 1 >= pageCount} onClick={() => setPage((value) => Math.min(pageCount - 1, value + 1))}>Next</button></div>}
     </details>}
     <p className="muted">Player 1 battery saves are supported. Host-streaming guest saves remain disabled until an authenticated ownership transfer exists.</p>
   </article>;

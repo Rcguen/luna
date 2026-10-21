@@ -42,13 +42,17 @@ For GitHub Pages, add `VITE_SUPABASE_URL` and
 
 - `games` stores per-user metadata and a SHA-256 ROM identifier; ROM bytes are
   never uploaded by the app.
-- `save_files` stores save metadata and revisions.
+- `save_files` stores save metadata and revisions. `save_files.pinned` protects
+  a manually pinned backup from automatic retention cleanup; the client keeps
+  the newest 10 unpinned backups per user/game/player/save type and never
+  removes the current revision.
 - Save bytes are kept in the private `luna-saves` bucket under
   `<user-id>/<game-id>/<player-slot>/<save-type>/<revision>-<sha256>.bin`.
 - RLS policies restrict rows to `auth.uid()`, and Storage policies restrict
   objects to the authenticated user's UUID prefix and the expected path shape.
 - The browser keeps failed uploads in IndexedDB and retries them when the
-  browser reports an online transition.
+  browser reports an online transition. Local battery writes happen every 5
+  seconds; cloud uploads are throttled separately and flush on exit/visibility.
 
 The migration grants table access only to `authenticated`, revokes table
 access from `anon`/`PUBLIC`, and recreates only the named Luna policies. Review

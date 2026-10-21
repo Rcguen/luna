@@ -14,6 +14,7 @@ import './styles.css';
 
 type Screen = 'home' | 'solo' | 'host' | 'guest' | 'distributed-host' | 'distributed-guest';
 type StreamQuality = 'auto' | 'smooth' | 'balanced' | 'sharp';
+type PendingCloudBattery = { userId: string; gameId: string; romHash: string; ownerId: string; localRevision: number; cloudRevision: number; bytes: ArrayBuffer };
 const EMPTY_DIAGNOSTICS: Diagnostics = { signaling: 'idle', connection: 'idle', ice: 'idle', gathering: 'idle', candidate: 'idle', channel: 'idle', rtt: null, fps: null, error: '' };
 const EMPTY_ENGINE: EngineDiagnostics = { wasm: 'idle', emulator: 'idle', rom: 'waiting', framesExecuted: 0, framesRendered: 0, lastFrame: '0×0', audioFrames: 0, audioBatches: 0, audioRate: 32768, error: '' };
 let audioNextTime = 0;
@@ -89,6 +90,10 @@ export default function App() {
   const cloudSaveRef = useRef<{ userId: string; gameId: string; romHash: string } | null>(null);
   const saveWriteRef = useRef<Promise<void>>(Promise.resolve());
   const lastSavedRevision = useRef(0);
+  const cloudPendingRef = useRef<PendingCloudBattery | null>(null);
+  const cloudTimerRef = useRef<number | null>(null);
+  const cloudInFlightRef = useRef<Promise<void> | null>(null);
+  const lastCloudUploadAt = useRef(0);
   const romBytesRef = useRef<Uint8Array | null>(null);
   const sessionRef = useRef<MultiPeerSession | null>(null);
   const distributedSessionRef = useRef<DistributedPeerSession | null>(null);
@@ -171,13 +176,53 @@ export default function App() {
     setSaveStatus(message);
   };
 
-  const persistLocalBattery = (): Promise<void> => {
+  const flushCloudSync = async (): Promise<void> => {
+    if (cloudInFlightRef.current) return cloudInFlightRef.current;
+    const pending = cloudPendingRef.current;
+    if (!pending) return;
+    cloudPendingRef.current = null;
+    const operation = (async () => {
+      try {
+        const uploaded = await uploadSave(pending.userId, pending.gameId, 1, 'battery', pending.bytes, { expectedRevision: pending.cloudRevision });
+        lastCloudUploadAt.current = Date.now();
+        if (uploaded) {
+          await setCloudRevision(pending.romHash, pending.ownerId, pending.localRevision, uploaded.revision);
+          if (activeSaveRef.current?.romHash === pending.romHash) setSaveStatus('Battery save stored locally and synced to cloud.');
+        } else if (activeSaveRef.current?.romHash === pending.romHash) {
+          setSaveStatus('Battery save stored locally; cloud upload is queued for retry.');
+        }
+      } catch (error) {
+        if (!(error instanceof SaveConflictError)) cloudPendingRef.current = pending;
+        if (activeSaveRef.current?.romHash === pending.romHash) setSaveStatus(error instanceof SaveConflictError ? error.message : `Battery save is safe locally; cloud sync failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    })();
+    cloudInFlightRef.current = operation;
+    try { await operation; } finally { cloudInFlightRef.current = null; }
+    // If local autosave changed while the upload was in flight, immediately
+    // continue with the newest snapshot instead of leaving it for a later tab
+    // lifecycle event. A failed retry reuses the same object and is not spun.
+    if (cloudPendingRef.current && cloudPendingRef.current !== pending) await flushCloudSync();
+  };
+
+  const scheduleCloudSync = (pending: PendingCloudBattery, immediate = false) => {
+    cloudPendingRef.current = pending;
+    if (immediate) {
+      if (cloudTimerRef.current !== null) { window.clearTimeout(cloudTimerRef.current); cloudTimerRef.current = null; }
+      void flushCloudSync();
+      return;
+    }
+    if (cloudTimerRef.current !== null) return;
+    const delay = lastCloudUploadAt.current === 0 ? 0 : Math.max(0, 30000 - (Date.now() - lastCloudUploadAt.current));
+    cloudTimerRef.current = window.setTimeout(() => { cloudTimerRef.current = null; void flushCloudSync(); }, delay);
+  };
+
+  const persistLocalBattery = (flushCloud = false): Promise<void> => {
     const active = activeSaveRef.current;
-    if (!active) return Promise.resolve();
+    if (!active) return flushCloud ? flushCloudSync() : Promise.resolve();
     let image;
     try { image = active.engine.exportBattery(0); }
     catch (error) { setSaveStatus(`Local save failed: ${error instanceof Error ? error.message : String(error)}`); return Promise.reject(error); }
-    if (!image) return Promise.resolve(); // The game has not initialized SRAM/Flash/EEPROM.
+    if (!image) return flushCloud ? flushCloudSync() : Promise.resolve(); // The game has not initialized SRAM/Flash/EEPROM.
     const { romHash, ownerId } = active;
     saveWriteRef.current = saveWriteRef.current.catch(() => undefined).then(async () => {
       try {
@@ -188,22 +233,14 @@ export default function App() {
         }
         const cloud = cloudSaveRef.current;
         if (cloud?.romHash === romHash && saved.cloudLocalRevision !== saved.revision) {
-          try {
-            const uploaded = await uploadSave(cloud.userId, cloud.gameId, 1, 'battery', saved.current.bytes, { expectedRevision: saved.cloudRevision });
-            if (uploaded) {
-              await setCloudRevision(romHash, ownerId, saved.revision, uploaded.revision);
-              if (activeSaveRef.current === active) setSaveStatus('Battery save stored locally and synced to cloud.');
-            } else if (activeSaveRef.current === active) setSaveStatus('Battery save stored locally; cloud sync is queued.');
-          } catch (error) {
-            if (activeSaveRef.current === active) setSaveStatus(error instanceof SaveConflictError ? error.message : `Battery save is safe locally; cloud sync failed: ${error instanceof Error ? error.message : String(error)}`);
-          }
+          scheduleCloudSync({ userId: cloud.userId, gameId: cloud.gameId, romHash, ownerId, localRevision: saved.revision, cloudRevision: saved.cloudRevision, bytes: saved.current.bytes.slice(0) }, flushCloud);
         }
       } catch (error) {
         setSaveStatus(`Local save failed: ${error instanceof Error ? error.message : String(error)}`);
         throw error;
       }
     });
-    return saveWriteRef.current;
+    return saveWriteRef.current.then(() => flushCloud ? flushCloudSync() : undefined);
   };
 
   useEffect(() => {
