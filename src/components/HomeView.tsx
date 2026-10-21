@@ -2,8 +2,11 @@ import type { Session } from '@supabase/supabase-js';
 import type { GameRecord } from '../lib/cloudSaves';
 import { AuthPanel } from './AuthPanel';
 import { GameLibrary } from './GameLibrary';
+import { ChoiceMenu } from './ChoiceMenu';
 
 export type OnlineMode = 'stream' | 'distributed';
+const playerOptions = [{ value: '2', label: '2 players' }, { value: '3', label: '3 players' }, { value: '4', label: '4 players' }] as const;
+const onlineModeOptions = [{ value: 'stream', label: 'Host streams the game' }, { value: 'distributed', label: 'Everyone has the same ROM' }] as const;
 
 type Props = {
   room: string;
@@ -84,8 +87,8 @@ export function HomeView({
 
             <div className="play-divider"><span>HOW DO YOU WANT TO PLAY?</span></div>
             <div className="room-settings">
-              <label>Players in room<select id="room-capacity" value={roomCapacity} onChange={(event) => onCapacity(Number(event.target.value))}><option value="2">2 players</option><option value="3">3 players</option><option value="4">4 players</option></select></label>
-              <label>Online mode<select id="online-mode" value={onlineMode} onChange={(event) => onMode(event.target.value as OnlineMode)}><option value="stream">Host streams the game</option><option value="distributed">Everyone has the same ROM</option></select></label>
+              <ChoiceMenu label="Players in room" value={String(roomCapacity)} options={playerOptions} onChange={(value) => onCapacity(Number(value))} />
+              <ChoiceMenu label="Online mode" value={onlineMode} options={onlineModeOptions} onChange={onMode} />
             </div>
             <p className="mode-explainer">{onlineMode === 'distributed' ? 'Each player loads the same ROM. Video and sound run locally on every device.' : 'Only the host needs a ROM. Guests receive their own video and sound stream.'}</p>
             <div className="primary-actions"><button className="secondary" onClick={onSolo} disabled={romLoading || !romLoaded}>Play solo</button><button onClick={onCreateRoom} disabled={romLoading || !romLoaded}>Create room <span aria-hidden="true">↗</span></button></div>
