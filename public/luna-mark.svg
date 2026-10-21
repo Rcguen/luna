@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Luna">
+  <defs>
+    <linearGradient id="night" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#9D8BFF"/><stop offset="1" stop-color="#5E67D8"/></linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="18" fill="url(#night)"/>
+  <path d="M45.6 17.1A21 21 0 1 0 47 47.7 19 19 0 0 1 45.6 17.1Z" fill="#F8F7FF"/>
+  <path d="M19 37h19M28.5 27.5v19" fill="none" stroke="#20234F" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="48" cy="23" r="3" fill="#FFE6A2"/>
+  <circle cx="51" cy="35" r="2" fill="#FFE6A2"/>
+</svg>

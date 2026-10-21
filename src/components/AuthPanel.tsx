@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
-import { supabase, supabaseConfigured, supabaseSetupMessage } from '../lib/supabase';
+import { supabase, supabaseConfigured } from '../lib/supabase';
 import { authRedirectUrl, cleanAuthCallbackUrl, formatAuthError, readAuthCallbackError } from '../lib/authRedirect';
 
 export function AuthPanel({ onSession }: { onSession: (session: Session | null) => void }) {
@@ -23,7 +23,7 @@ export function AuthPanel({ onSession }: { onSession: (session: Session | null) 
     });
     return () => data.subscription.unsubscribe();
   }, [onSession]);
-  if (!supabaseConfigured) return <div className="account-card"><strong>Cloud library</strong><p className="muted">{supabaseSetupMessage}</p><p className="muted">Create a Supabase project, apply the migration, then add the values to `.env.local` for local development and GitHub Actions secrets for deployment.</p></div>;
+  if (!supabaseConfigured) return <div className="account-card"><p className="eyebrow">YOUR ACCOUNT</p><strong>Cloud library is offline</strong><p className="muted">You can still load games and play locally. Account sync will appear here when it is configured.</p></div>;
   const submit = async () => { setBusy(true); setMessage(''); setExpired(false); const result = mode === 'sign-in' ? await supabase?.auth.signInWithPassword({ email, password }) : await supabase?.auth.signUp({ email, password, options: { emailRedirectTo: authRedirectUrl() } }); setBusy(false); if (result?.error) { const formatted = formatAuthError(result.error); setMessage(formatted.message); setExpired(formatted.expired || /not confirmed/i.test(result.error.message)); } else setMessage(mode === 'sign-up' ? 'Check your email to confirm the account.' : 'Signed in.'); };
   const resend = async () => { if (!email) { setMessage('Enter your email first.'); return; } setBusy(true); setMessage('Sending a new confirmation email…'); const result = await supabase?.auth.resend({ type: 'signup', email, options: { emailRedirectTo: authRedirectUrl() } }); setBusy(false); if (result?.error) setMessage(formatAuthError(result.error).message); else { setExpired(false); setMessage('A new confirmation email was requested. Check your inbox and spam folder.'); } };
   const reset = async () => { if (!email) { setMessage('Enter your email first.'); return; } setBusy(true); const result = await supabase?.auth.resetPasswordForEmail(email, { redirectTo: authRedirectUrl() }); setBusy(false); setMessage(result?.error ? formatAuthError(result.error).message : 'Password reset email requested.'); };

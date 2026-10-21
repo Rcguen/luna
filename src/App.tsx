@@ -4,8 +4,7 @@ import { type Diagnostics, type PlayerSlot } from './netplay/peerSession';
 import { MultiPeerSession, type MultiGuestRequest } from './netplay/multiPeerSession';
 import { DistributedPeerSession, type DistributedInput } from './netplay/distributedPeerSession';
 import { TouchControls } from './components/TouchControls';
-import { AuthPanel } from './components/AuthPanel';
-import { GameLibrary } from './components/GameLibrary';
+import { HomeView, type OnlineMode } from './components/HomeView';
 import { listGames, registerGame, type GameRecord } from './lib/cloudSaves';
 import { cacheRom, getCachedRom, hashRom } from './lib/localRoms';
 import type { Session } from '@supabase/supabase-js';
@@ -14,7 +13,6 @@ import './styles.css';
 
 type Screen = 'home' | 'solo' | 'host' | 'guest' | 'distributed-host' | 'distributed-guest';
 type StreamQuality = 'auto' | 'smooth' | 'balanced' | 'sharp';
-type OnlineMode = 'stream' | 'distributed';
 const EMPTY_DIAGNOSTICS: Diagnostics = { signaling: 'idle', connection: 'idle', ice: 'idle', gathering: 'idle', candidate: 'idle', channel: 'idle', rtt: null, fps: null, error: '' };
 const EMPTY_ENGINE: EngineDiagnostics = { wasm: 'idle', emulator: 'idle', rom: 'waiting', framesExecuted: 0, framesRendered: 0, lastFrame: '0×0', audioFrames: 0, audioBatches: 0, audioRate: 32768, error: '' };
 let audioNextTime = 0;
@@ -157,7 +155,7 @@ export default function App() {
   const makeEvents = (hostSide: boolean) => ({
     status: (text: string) => setStatus(text),
     diagnostics: (value: Diagnostics) => setDiagnostics(value),
-    guestRequest: (request: MultiGuestRequest) => { setPendingGuest(request); setPlayerStates((states) => ({ ...states, [request.slot]: 'pending' })); },
+    guestRequest: (request: MultiGuestRequest) => { setPendingGuest(request); setHostPanelOpen(true); setPlayerStates((states) => ({ ...states, [request.slot]: 'pending' })); },
     input: (slot: PlayerSlot, keys: number) => { if (hostSide) engineRef.current?.setKeys(slot - 1, keys); },
     // This callback is created before the guest receives its assigned slot.
     // Do not capture the initial null state: the host session already routes
@@ -171,7 +169,7 @@ export default function App() {
   const makeDistributedEvents = (hostSide: boolean) => ({
     status: (text: string) => setStatus(text),
     diagnostics: (value: Diagnostics) => setDiagnostics(value),
-    guestRequest: (request: MultiGuestRequest) => { setPendingGuest(request); setPlayerStates((states) => ({ ...states, [request.slot]: 'pending' })); },
+    guestRequest: (request: MultiGuestRequest) => { setPendingGuest(request); setHostPanelOpen(true); setPlayerStates((states) => ({ ...states, [request.slot]: 'pending' })); },
     input: (value: DistributedInput) => {
       const tick = distributedInputs.current.get(value.tick) || new Map<PlayerSlot, number>();
       tick.set(value.slot, value.keys);
@@ -539,9 +537,9 @@ export default function App() {
     <TouchControls onKeys={(keys) => { guestKeys.current = keys; }} /><button className="secondary" onClick={leave}>End session</button>
   </GameShell>;
 
-  if (screen === 'guest') return <GameShell role="guest" title={`Guest Player ${assignedSlot || '…'}`} subtitle={`${roomCapacity}-player room · ${formatCode(roomCode)}`} canvasRef={guestCanvas} overlay={!guestHasVideo ? <div className="screen-overlay">Waiting for host video<small>Ask the host to approve you and start the game.</small></div> : undefined}><StatusPanel diagnostics={diagnostics} status={status} /><TouchControls onKeys={(keys) => sessionRef.current?.sendInput(keys)} /><button className="secondary" onClick={leave}>Disconnect</button></GameShell>;
+  if (screen === 'guest') return <GameShell role="guest" title={`Guest Player ${assignedSlot || '…'}`} subtitle={`${roomCapacity}-player room · ${formatCode(roomCode)}`} canvasRef={guestCanvas} caption={`PLAYER ${assignedSlot || '…'} · STREAM`} overlay={!guestHasVideo ? <div className="screen-overlay">Waiting for host video<small>Ask the host to approve you and start the game.</small></div> : undefined}><StatusPanel diagnostics={diagnostics} status={status} /><TouchControls onKeys={(keys) => sessionRef.current?.sendInput(keys)} /><button className="secondary" onClick={leave}>Disconnect</button></GameShell>;
 
-  if (screen === 'distributed-guest') return <GameShell role="guest" local badge={assignedSlot ? `P${assignedSlot}` : 'GUEST'} title={`Player ${assignedSlot || '…'}`} subtitle={`${roomCapacity}-player distributed room · ${formatCode(roomCode)}`} canvasRef={hostCanvas} overlay={!gameStarted ? <div className="screen-overlay">Waiting for synchronized start<small>Both devices must approve and load the same ROM.</small></div> : undefined}><StatusPanel diagnostics={diagnostics} status={status} /><EngineStatusPanel status={engineStatus} /><TouchControls onKeys={(keys) => { guestKeys.current = keys; }} /><button className="secondary" onClick={leave}>Disconnect</button></GameShell>;
+  if (screen === 'distributed-guest') return <GameShell role="guest" local badge={assignedSlot ? `P${assignedSlot}` : 'GUEST'} title={`Player ${assignedSlot || '…'}`} subtitle={`${roomCapacity}-player distributed room · ${formatCode(roomCode)}`} canvasRef={hostCanvas} caption={`PLAYER ${assignedSlot || '…'} · LOCAL`} overlay={!gameStarted ? <div className="screen-overlay">Waiting for synchronized start<small>Both devices must approve and load the same ROM.</small></div> : undefined}><StatusPanel diagnostics={diagnostics} status={status} /><EngineStatusPanel status={engineStatus} /><TouchControls onKeys={(keys) => { guestKeys.current = keys; }} /><button className="secondary" onClick={leave}>Disconnect</button></GameShell>;
 
   const loadSavedGame = async (game: GameRecord) => {
     const cached = await getCachedRom(game.rom_hash);
@@ -554,7 +552,26 @@ export default function App() {
     setStatus(`Loaded ${game.title}. Ready to play.`);
   };
 
-  return <main className="home"><div className="brand"><span className="star" aria-hidden="true">✦</span><p className="eyebrow">ONLINE GBA ADVENTURES</p><h1>Luna</h1><p className="lede">Your games, ready where you left them.</p></div><AuthPanel onSession={setSession} /><section className="home-card" aria-labelledby="play-heading"><div className="play-heading"><div><p id="play-heading" className="eyebrow">PLAY</p><h2 title={romLoaded ? romName : 'Choose a game'}>{romLoaded ? romName : 'Choose a game'}</h2></div><span className="ready-pill">{romLoaded ? 'READY' : 'LOCAL ROM'}</span></div><label className="muted" htmlFor="room-capacity">Players per room</label><select id="room-capacity" value={roomCapacity} onChange={(e) => { const value = Number(e.target.value); setRoomCapacity(value); setStatus(`Ready for a ${value}-player session.`); }}><option value="2">2 players</option><option value="3">3 players</option><option value="4">4 players</option></select><label className="muted" htmlFor="online-mode">Online mode</label><select id="online-mode" value={onlineMode} onChange={(e) => setOnlineMode(e.target.value as OnlineMode)}><option value="distributed">Distributed same-ROM (local video/audio)</option><option value="stream">Host stream (guest needs no ROM)</option></select><label className="file-button home-file">{romLoading ? 'Loading ROM…' : romLoaded ? 'Change local ROM' : 'Load ROM from device'}<input aria-label="Load a legal ROM" type="file" accept=".gba,.gb,.gbc" disabled={romLoading} onChange={(e) => e.target.files?.[0] && loadRom(e.target.files[0])} /></label><div className="primary-actions"><button className="secondary" onClick={startSolo} disabled={romLoading || !romLoaded}>{romLoading ? 'Loading ROM…' : 'Play solo'}</button><button onClick={onlineMode === 'distributed' ? startDistributedHost : startHost} disabled={romLoading || !romLoaded}>{romLoading ? 'Loading ROM…' : onlineMode === 'distributed' ? 'Create distributed room' : 'Create stream room'} <span aria-hidden="true">→</span></button></div><div className="join-row"><input aria-label="Six-digit room code" inputMode="numeric" maxLength={6} placeholder="ROOM CODE" value={room} onChange={(e) => setRoom(e.target.value.replace(/\D/g, ''))} /><button className="secondary" onClick={joinRoom}>Join</button></div><p className="muted">{onlineMode === 'distributed' ? 'Both devices load the same ROM. Only synchronized inputs cross the network.' : 'The host runs the ROM and streams each player view.'}</p><p className="status" role="status">{status}</p></section><GameLibrary userId={session?.user.id || null} refreshKey={libraryRefresh} onLoadGame={loadSavedGame} /><footer>ROM files stay on this device. Your account stores game metadata and cloud saves, so your library can remember what to open next.</footer></main>;
+  return <HomeView
+    room={room}
+    roomCapacity={roomCapacity}
+    onlineMode={onlineMode}
+    romName={romName}
+    romLoaded={romLoaded}
+    romLoading={romLoading}
+    status={status}
+    session={session}
+    libraryRefresh={libraryRefresh}
+    onRoom={setRoom}
+    onCapacity={(value) => { setRoomCapacity(value); setStatus(`Ready for a ${value}-player session.`); }}
+    onMode={setOnlineMode}
+    onLoadRom={(file) => { void loadRom(file); }}
+    onSolo={() => { void startSolo(); }}
+    onCreateRoom={() => { void (onlineMode === 'distributed' ? startDistributedHost() : startHost()); }}
+    onJoin={() => { void joinRoom(); }}
+    onSession={setSession}
+    onLoadGame={loadSavedGame}
+  />;
 }
 
 const canvasImages = new WeakMap<HTMLCanvasElement, ImageData>();
@@ -597,7 +614,31 @@ function playPcm(rate: number, samples: Int16Array) {
   source.start(start); audioNextTime = start + buffer.duration;
 }
 
-function GameShell({ role, title, subtitle, canvasRef, children, local = false, badge, overlay }: { role: 'solo' | 'host' | 'guest'; title: string; subtitle: string; canvasRef: React.RefObject<HTMLCanvasElement>; children: React.ReactNode; local?: boolean; badge?: string; overlay?: React.ReactNode }) { return <main className={`game-shell role-${role}`}><header><div><p className="eyebrow">LUNA ONLINE</p><h1>{title}</h1><p className="muted">{subtitle}</p></div><span className={`live-dot ${local ? 'host' : ''}`}>{badge || (local ? 'HOST' : 'GUEST')}</span></header><section className="play-layout"><div className="screen-card"><div className="screen-stage"><canvas ref={canvasRef} aria-label={local ? 'Player 1 game screen' : 'Player 2 remote game screen'} />{overlay}</div><div className="screen-caption"><span>{local ? 'PLAYER 1 · LOCAL' : 'PLAYER 2 · REMOTE'}</span><button className="fullscreen-button" type="button" aria-label="Toggle fullscreen" onClick={toggleFullscreen}>Fullscreen</button></div></div><aside>{children}</aside></section></main>; }
+function GameShell({ role, title, subtitle, canvasRef, children, local = false, badge, overlay, caption }: {
+  role: 'solo' | 'host' | 'guest';
+  title: string;
+  subtitle: string;
+  canvasRef: React.RefObject<HTMLCanvasElement>;
+  children: React.ReactNode;
+  local?: boolean;
+  badge?: string;
+  overlay?: React.ReactNode;
+  caption?: string;
+}) {
+  const playerCaption = caption || (local ? 'PLAYER 1 · LOCAL' : 'PLAYER 2 · REMOTE');
+  return <main className={`game-shell role-${role}`}>
+    <header className="session-header">
+      <div className="session-title"><img src={`${import.meta.env.BASE_URL}luna-mark.svg`} alt="" width="42" height="42" /><div><p className="eyebrow">LUNA / NOW PLAYING</p><h1>{title}</h1><p className="muted">{subtitle}</p></div></div>
+      <span className={`live-dot ${local ? 'host' : ''}`}>{badge || (local ? 'HOST' : 'GUEST')}</span>
+    </header>
+    <section className="play-layout">
+      <div className="screen-card"><div className="screen-stage"><canvas ref={canvasRef} aria-label={playerCaption} />{overlay}</div>
+        <div className="screen-caption"><span>{playerCaption}</span><span className="desktop-key-hint">ARROWS · MOVE &nbsp; Z / X · A / B &nbsp; ENTER · START</span><button className="fullscreen-button" type="button" aria-label="Toggle fullscreen" onClick={toggleFullscreen}>Fullscreen</button></div>
+      </div>
+      <aside>{children}</aside>
+    </section>
+  </main>;
+}
 
 function EngineStatusPanel({ status }: { status: EngineDiagnostics }) { return <div className="status-panel engine-panel"><strong>Emulator diagnostics</strong><dl><dt>WASM</dt><dd>{status.wasm}</dd><dt>Emulator</dt><dd>{status.emulator}</dd><dt>ROM</dt><dd>{status.rom}</dd><dt>Frames executed</dt><dd>{status.framesExecuted}</dd><dt>Frames rendered</dt><dd>{status.framesRendered}</dd><dt>Framebuffer</dt><dd>{status.lastFrame}</dd><dt>Audio samples</dt><dd>{status.audioFrames} @ {status.audioRate} Hz</dd><dt>Audio batches</dt><dd>{status.audioBatches}</dd></dl>{status.error && <p className="error">{status.error}</p>}</div>; }
 
