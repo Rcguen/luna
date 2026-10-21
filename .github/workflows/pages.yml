@@ -1,4 +1,4 @@
-name: Deploy Kirby Online
+name: Deploy Luna
 
 on:
   push:
